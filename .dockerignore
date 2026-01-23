@@ -1,0 +1,11 @@
+# no incluyas el virtualenv local
+../../../PycharmProjects/scrappyActuacionesRamaJudicial/.venv/
+# carpetas de debug/no relevantes
+debug/
+tmp_profiles/
+# la carpeta de output local (PDF/CSV generados)
+output/
+# caches y archivos binarios
+__pycache__/
+*.py[cod]
+*.log

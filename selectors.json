@@ -1,0 +1,19 @@
+{
+  "radio_busqueda_numero": [
+    "xpath://label[contains(., 'Todos los Procesos (consulta completa, menos rápida)')]",
+    "xpath://input[@id='input-113']"
+  ],
+  "input_numero": [
+    "xpath://input[@placeholder='Ingrese los 23 dígitos del número de Radicación']"
+  ],
+  "btn_consultar": [
+    "xpath://span[text()='Consultar']",
+    "css:button.btn-consultar"
+  ],
+  "btn_volver": [
+    "xpath://span[text()=' Volver ']"
+  ],
+  "tabla_actuaciones": [
+    "tag:table"
+  ]
+}
