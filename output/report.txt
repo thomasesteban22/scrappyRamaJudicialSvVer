@@ -1,0 +1,4 @@
+Reporte generado: 2025-07-29 15:37:22.949075
+Total: 19, Escaneados: 19, Con actuaciones: 1, Sin actuaciones: 18, Errores: 0
+
+Cero errores.
