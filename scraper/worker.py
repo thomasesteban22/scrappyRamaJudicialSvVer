@@ -14,6 +14,8 @@ from .config import DIAS_BUSQUEDA, WAIT_TIME
 from .browser import is_page_maintenance
 from page_objects import ConsultaProcesosPage
 
+
+
 # Contador para mostrar progreso
 process_counter = itertools.count(1)
 TOTAL_PROCESSES = 0  # ← se asigna en main.py: worker.TOTAL_PROCESSES = len(procesos)

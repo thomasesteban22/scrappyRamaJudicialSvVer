@@ -13,12 +13,28 @@ logging.getLogger("selenium").setLevel(logging.WARNING)
 def new_chrome_driver(worker_id=None):
     opts = webdriver.ChromeOptions()
 
-    # Ocultar Selenium
+    # =========================
+    # OCULTAR SELENIUM
+    # =========================
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
     opts.add_experimental_option("useAutomationExtension", False)
 
-    # Flags CRÍTICOS para VPS
+    # =========================
+    # 🔥 PROXY SOCKS5 (TÚNEL SSH)
+    # =========================
+    # Asegúrate de tener:
+    # ssh -N -D 1080 usuario@TU_IP ejecutándose
+    opts.add_argument("--proxy-server=socks5://127.0.0.1:1080")
+
+    # Evitar fugas DNS fuera del túnel
+    opts.add_argument(
+        "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"
+    )
+
+    # =========================
+    # FLAGS CRÍTICOS VPS
+    # =========================
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
@@ -26,38 +42,51 @@ def new_chrome_driver(worker_id=None):
     opts.add_argument("--disable-extensions")
     opts.add_argument("--disable-infobars")
 
-    # Headless moderno (MUY importante)
+    # =========================
+    # HEADLESS
+    # =========================
     if ENV.upper() == "PRODUCTION":
         opts.add_argument("--headless=new")
 
-    # NO bloquear CSS (solo imágenes)
+    # =========================
+    # PREFS (NO bloquear CSS)
+    # =========================
     prefs = {
         "profile.managed_default_content_settings.images": 2
     }
     opts.add_experimental_option("prefs", prefs)
 
-    # Estrategia de carga
+    # =========================
+    # ESTRATEGIA DE CARGA
+    # =========================
     opts.page_load_strategy = "normal"
 
-    # Perfil aislado por worker
+    # =========================
+    # PERFIL AISLADO
+    # =========================
     base = os.path.join(os.getcwd(), "tmp_profiles")
     os.makedirs(base, exist_ok=True)
     stamp = worker_id if worker_id is not None else int(time.time() * 1000)
     profile_dir = os.path.join(base, f"profile_{stamp}")
     opts.add_argument(f"--user-data-dir={profile_dir}")
 
-    # Chrome bin (opcional)
+    # =========================
+    # CHROME BIN (opcional)
+    # =========================
     chrome_bin = os.environ.get("CHROME_BIN")
     if chrome_bin and os.path.isfile(chrome_bin):
         opts.binary_location = chrome_bin
 
-    # Usar ChromeDriver del sistema (Docker)
+    # =========================
+    # DRIVER
+    # =========================
     service = Service()
-
     driver = webdriver.Chrome(service=service, options=opts)
 
-    # Timeouts globales (CLAVE)
-    driver.set_page_load_timeout(60)
+    # =========================
+    # TIMEOUTS GLOBALES
+    # =========================
+    driver.set_page_load_timeout(90)   # ⬅️ más tolerante a latencia
     driver.implicitly_wait(10)
 
     return driver
