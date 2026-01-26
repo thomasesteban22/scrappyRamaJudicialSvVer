@@ -4,6 +4,7 @@ import smtplib
 import time
 import threading
 import logging
+import requests
 import itertools
 from queue import Queue
 from datetime import date, datetime, timedelta
@@ -175,9 +176,21 @@ def ejecutar_ciclo():
             logging.error(f"  • {num}: {msg}")
     logging.info(">>> FIN DE CICLO <<<\n")
 
+def log_ip_salida():
+    try:
+        ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
+        logging.info(f"IP SALIENTE DEL CONTENEDOR: {ip}")
+    except Exception as e:
+        logging.error(f"No se pudo obtener IP de salida: {e}")
+
+
 
 def main():
     logging.info("Scheduler iniciado, esperando el primer ciclo diario...")
+
+    # Log de IP de salida
+    log_ip_salida()
+
     bogota_tz = ZoneInfo("America/Bogota")
     hh, mm = map(int, SCHEDULE_TIME.split(":"))
 

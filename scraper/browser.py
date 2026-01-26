@@ -82,9 +82,7 @@ def new_chrome_driver(worker_id=None):
     # =========================
     service = Service()
     driver = webdriver.Chrome(service=service, options=opts)
-    driver.get("https://ifconfig.me")
-    print(driver.find_element(By.TAG_NAME, "body").text)
-    print("Empezando...")
+
     # =========================
     # TIMEOUTS GLOBALES
     # =========================
