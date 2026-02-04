@@ -20,17 +20,7 @@ def new_chrome_driver(worker_id=None):
     opts.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
     opts.add_experimental_option("useAutomationExtension", False)
 
-    # =========================
-    # 🔥 PROXY SOCKS5 (TÚNEL SSH)
-    # =========================
-    # Asegúrate de tener:
-    # ssh -N -D 1080 usuario@TU_IP ejecutándose
-    opts.add_argument("--proxy-server=socks5://127.0.0.1:1080")
 
-    # Evitar fugas DNS fuera del túnel
-    opts.add_argument(
-        "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"
-    )
 
     # =========================
     # FLAGS CRÍTICOS VPS
