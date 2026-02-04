@@ -57,6 +57,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
     try:
         # 1) Cargo la página principal y espero DOM completo
         page.load()
+        wait_page_ready(driver)
         wait()
 
         # 1.a) Mantenimiento
