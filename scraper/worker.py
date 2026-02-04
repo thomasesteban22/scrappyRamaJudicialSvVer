@@ -25,6 +25,25 @@ def wait():
     extra = WAIT_TIME * 0.5 * random.random()
     time.sleep(WAIT_TIME + extra)
 
+def wait_page_ready(driver, timeout=30):
+    """Espera a que la página de Rama Judicial cargue completamente."""
+
+    wait = WebDriverWait(driver, timeout)
+
+    # DOM cargado
+    wait.until(
+        lambda d: d.execute_script("return document.readyState") == "complete"
+    )
+
+    # Elemento que confirma que la UI cargó
+    wait.until(
+        EC.presence_of_element_located(
+            (By.XPATH, "//img[@alt='Ir a la rama Judicial']")
+        )
+    )
+
+    logging.info("Página cargó correctamente")
+
 def worker_task(numero, driver, results, actes, errors, lock):
     idx       = next(process_counter)
     total     = TOTAL_PROCESSES or idx
@@ -45,6 +64,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
             logging.warning(f"{numero}: Mantenimiento detectado; durmiendo 30 min")
             time.sleep(1800)
             page.load()
+            wait_page_ready(driver)
             wait()
 
         # 2) Selecciono “Todos los Procesos”

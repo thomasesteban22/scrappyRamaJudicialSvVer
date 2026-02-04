@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     libnss3 libxss1 libasound2 \
     libatk-bridge2.0-0 libgtk-3-0 \
     libx11-xcb1 libdrm2 libgbm1 \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Chrome
@@ -18,6 +19,9 @@ RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearm
     && apt-get update \
     && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
+
+# SSH folder
+RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
 
 WORKDIR /app
 
