@@ -26,21 +26,23 @@ def wait():
     time.sleep(WAIT_TIME + extra)
 
 def wait_page_ready(driver, timeout=30):
-    """Espera a que la página de Rama Judicial cargue completamente."""
 
     wait = WebDriverWait(driver, timeout)
 
-    # DOM cargado
     wait.until(
         lambda d: d.execute_script("return document.readyState") == "complete"
     )
 
-    # Elemento que confirma que la UI cargó
-    wait.until(
-        EC.presence_of_element_located(
-            (By.XPATH, "//img[@alt='Ir a la rama Judicial']")
+    try:
+        wait.until(
+            EC.presence_of_element_located((By.ID, "mainContent"))
         )
-    )
+    except TimeoutException:
+        wait.until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+
+    logging.info("Página cargó correctamente")
 
     logging.info("Página cargó correctamente")
 
