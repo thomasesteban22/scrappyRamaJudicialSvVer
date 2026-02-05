@@ -13,6 +13,36 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
+def probar_un_proceso(numero):
+    """
+    Ejecuta worker_task completo para UN solo proceso.
+    Usar en VPS para debug sin scheduler ni threads.
+    """
+    import itertools, threading, logging
+    from .browser import new_chrome_driver
+    from .worker import worker_task
+    import scraper.worker as worker
+
+    results, actes, errors = [], [], []
+    lock = threading.Lock()
+
+    # Reiniciar contadores
+    worker.process_counter = itertools.count(1)
+    worker.TOTAL_PROCESSES = 1
+
+    driver = new_chrome_driver(0, headless=True)
+
+    try:
+        logging.info(f"🧪 Probando proceso {numero}")
+        worker_task(numero, driver, results, actes, errors, lock)
+        logging.info(f"✅ Prueba finalizada")
+        logging.info(f"Actuaciones encontradas: {len(actes)}")
+        logging.info(f"Errores: {len(errors)}")
+    except Exception as e:
+        logging.error(f"❌ Error en prueba: {e}")
+    finally:
+        driver.quit()
+
 # 1) Silencia TensorFlow y Chrome/DevTools
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['WEBVIEW_LOG_LEVEL'] = '3'
@@ -193,6 +223,8 @@ def main():
 
     # Log de IP de salida
     log_ip_salida()
+
+    probar_un_proceso("08296408900120190029100")
 
     bogota_tz = ZoneInfo("America/Bogota")
     hh, mm = map(int, SCHEDULE_TIME.split(":"))
