@@ -54,4 +54,4 @@ COPY . .
 # -------------------------------
 # Comando por defecto usando Xvfb
 # -------------------------------
-CMD ["xvfb-run", "-a", "python", "-m", "scraper.main"]
+CMD ["xvfb-run", "-a", "python", "-u", "-m", "scraper.main"]
