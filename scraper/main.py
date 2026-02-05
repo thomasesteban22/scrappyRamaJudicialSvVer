@@ -13,32 +13,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
-def consultar_proceso(numero_radicacion):
-    """
-    Consulta un proceso directamente usando la API del Rama Judicial.
-    Devuelve un JSON con la información, o None si falla.
-    """
-    url = "https://consultaprocesos.ramajudicial.gov.co:448/api/v2/Procesos/Consulta/NumeroRadicacion"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://consultaprocesos.ramajudicial.gov.co/Procesos/NumeroRadicacion",
-        "Origin": "https://consultaprocesos.ramajudicial.gov.co",
-    }
-    params = {
-        "numero": numero_radicacion,
-        "SoloActivos": False,
-        "pagina": 1
-    }
-
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error consultando {numero_radicacion}: {e}")
-        return None
-
 # 1) Silencia TensorFlow y Chrome/DevTools
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['WEBVIEW_LOG_LEVEL'] = '3'
@@ -52,6 +26,7 @@ logging.basicConfig(
 for noisy in ('selenium', 'urllib3', 'absl', 'google_apis'):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
+# --- IMPORTS DE TU PROYECTO ---
 from .config import (
     OUTPUT_DIR,
     NUM_THREADS,
@@ -66,7 +41,7 @@ from .worker import worker_task
 import scraper.worker as worker
 from .reporter import generar_pdf
 
-
+# ---------------- FUNCIONES ---------------- #
 
 def exportar_csv(actes, start_ts):
     fecha_registro = date.fromtimestamp(start_ts).isoformat()
@@ -93,7 +68,7 @@ def exportar_csv(actes, start_ts):
                 actu,
                 anota
             ])
-    print(f"CSV generado: {csv_path}")
+    logging.info(f"CSV generado: {csv_path}")
 
 
 def send_report_email():
@@ -121,7 +96,7 @@ def send_report_email():
 
     smtp.sendmail(EMAIL_USER, [EMAIL_USER], msg.as_string())
     smtp.quit()
-    print("Correo enviado exitosamente.", flush=True)
+    logging.info("Correo enviado exitosamente.")
 
 
 def ejecutar_ciclo():
@@ -161,7 +136,7 @@ def ejecutar_ciclo():
 
     def loop(driver):
         while True:
-            numero = q.get();
+            numero = q.get()
             q.task_done()
             if numero is None:
                 break
@@ -203,6 +178,7 @@ def ejecutar_ciclo():
             logging.error(f"  • {num}: {msg}")
     logging.info(">>> FIN DE CICLO <<<\n")
 
+
 def log_ip_salida():
     try:
         ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
@@ -211,7 +187,7 @@ def log_ip_salida():
         logging.error(f"No se pudo obtener IP de salida: {e}")
 
 
-
+# ---------------- MAIN ---------------- #
 def main():
     logging.info("Scheduler iniciado, esperando el primer ciclo diario...")
 
@@ -221,16 +197,27 @@ def main():
     bogota_tz = ZoneInfo("America/Bogota")
     hh, mm = map(int, SCHEDULE_TIME.split(":"))
 
-    # --- PRUEBA RÁPIDA DE UN PROCESO ---
+    # --- PRUEBA RÁPIDA DE UN PROCESO REAL (Selenium) ---
     numero_prueba = "08296408900120190029100"  # Cambia por cualquier radicación real
-    logging.info(f"Probando consulta directa de proceso: {numero_prueba}")
-    resultado = consultar_proceso(numero_prueba)
-    if resultado:
-        logging.info(f"✅ Datos obtenidos para {numero_prueba}: {resultado}")
-    else:
-        logging.warning(f"❌ No se pudo obtener información para {numero_prueba}")
+    logging.info(f"Probando scraping de proceso: {numero_prueba}")
+
+    driver = new_chrome_driver(0)
+    results, actes, errors = [], [], []
+    lock = threading.Lock()
+
+    try:
+        worker_task(numero_prueba, driver, results, actes, errors, lock)
+        if actes:
+            logging.info(f"✅ Datos obtenidos para {numero_prueba}: {actes}")
+        else:
+            logging.warning(f"❌ No se encontraron actuaciones para {numero_prueba}")
+    except Exception as e:
+        logging.error(f"Error ejecutando worker_task: {e}")
+    finally:
+        driver.quit()
     # --- FIN PRUEBA ---
 
+    # Scheduler diario
     while True:
         now = datetime.now(bogota_tz)
         target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
@@ -253,9 +240,7 @@ def main():
                 time.sleep(remaining)
                 remaining = 0
 
-        # Hora de arrancar un nuevo ciclo
         ejecutar_ciclo()
-
 
 
 if __name__ == "__main__":
