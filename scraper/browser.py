@@ -10,7 +10,9 @@ from .config import ENV
 
 logging.getLogger("selenium").setLevel(logging.WARNING)
 
+
 def new_chrome_driver(worker_id=None):
+
     opts = webdriver.ChromeOptions()
 
     # =========================
@@ -19,8 +21,6 @@ def new_chrome_driver(worker_id=None):
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
     opts.add_experimental_option("useAutomationExtension", False)
-
-
 
     # =========================
     # FLAGS CRÍTICOS VPS
@@ -33,18 +33,22 @@ def new_chrome_driver(worker_id=None):
     opts.add_argument("--disable-infobars")
 
     # =========================
+    # IDIOMA REAL COLOMBIA
+    # =========================
+    opts.add_argument("--lang=es-CO")
+
+    prefs = {
+        "profile.managed_default_content_settings.images": 2,
+        "intl.accept_languages": "es-CO,es"
+    }
+
+    opts.add_experimental_option("prefs", prefs)
+
+    # =========================
     # HEADLESS
     # =========================
     if ENV.upper() == "PRODUCTION":
         opts.add_argument("--headless=new")
-
-    # =========================
-    # PREFS (NO bloquear CSS)
-    # =========================
-    prefs = {
-        "profile.managed_default_content_settings.images": 2
-    }
-    opts.add_experimental_option("prefs", prefs)
 
     # =========================
     # ESTRATEGIA DE CARGA
@@ -56,8 +60,10 @@ def new_chrome_driver(worker_id=None):
     # =========================
     base = os.path.join(os.getcwd(), "tmp_profiles")
     os.makedirs(base, exist_ok=True)
+
     stamp = worker_id if worker_id is not None else int(time.time() * 1000)
     profile_dir = os.path.join(base, f"profile_{stamp}")
+
     opts.add_argument(f"--user-data-dir={profile_dir}")
 
     # =========================
@@ -74,9 +80,29 @@ def new_chrome_driver(worker_id=None):
     driver = webdriver.Chrome(service=service, options=opts)
 
     # =========================
+    # ANTI DETECCIÓN JS
+    # =========================
+    driver.execute_script("""
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        })
+    """)
+
+    # =========================
+    # ZONA HORARIA COLOMBIA (CRÍTICO)
+    # =========================
+    try:
+        driver.execute_cdp_cmd(
+            "Emulation.setTimezoneOverride",
+            {"timezoneId": "America/Bogota"}
+        )
+    except Exception:
+        pass
+
+    # =========================
     # TIMEOUTS GLOBALES
     # =========================
-    driver.set_page_load_timeout(90)   # ⬅️ más tolerante a latencia
+    driver.set_page_load_timeout(90)
     driver.implicitly_wait(10)
 
     return driver

@@ -2,6 +2,7 @@ FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV TZ=America/Bogota
 
 RUN apt-get update && apt-get install -y \
     wget curl unzip gnupg ca-certificates \
@@ -10,6 +11,9 @@ RUN apt-get update && apt-get install -y \
     libatk-bridge2.0-0 libgtk-3-0 \
     libx11-xcb1 libdrm2 libgbm1 \
     openssh-client \
+    tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 # Chrome
