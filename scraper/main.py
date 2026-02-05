@@ -13,6 +13,32 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
+def consultar_proceso(numero_radicacion):
+    """
+    Consulta un proceso directamente usando la API del Rama Judicial.
+    Devuelve un JSON con la información, o None si falla.
+    """
+    url = "https://consultaprocesos.ramajudicial.gov.co:448/api/v2/Procesos/Consulta/NumeroRadicacion"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://consultaprocesos.ramajudicial.gov.co/Procesos/NumeroRadicacion",
+        "Origin": "https://consultaprocesos.ramajudicial.gov.co",
+    }
+    params = {
+        "numero": numero_radicacion,
+        "SoloActivos": False,
+        "pagina": 1
+    }
+
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error consultando {numero_radicacion}: {e}")
+        return None
+
 # 1) Silencia TensorFlow y Chrome/DevTools
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['WEBVIEW_LOG_LEVEL'] = '3'
@@ -39,6 +65,7 @@ from .browser import new_chrome_driver
 from .worker import worker_task
 import scraper.worker as worker
 from .reporter import generar_pdf
+
 
 
 def exportar_csv(actes, start_ts):
@@ -193,6 +220,16 @@ def main():
 
     bogota_tz = ZoneInfo("America/Bogota")
     hh, mm = map(int, SCHEDULE_TIME.split(":"))
+
+    # --- PRUEBA RÁPIDA DE UN PROCESO ---
+    numero_prueba = "08296408900120190029100"  # Cambia por cualquier radicación real
+    logging.info(f"Probando consulta directa de proceso: {numero_prueba}")
+    resultado = consultar_proceso(numero_prueba)
+    if resultado:
+        logging.info(f"✅ Datos obtenidos para {numero_prueba}: {resultado}")
+    else:
+        logging.warning(f"❌ No se pudo obtener información para {numero_prueba}")
+    # --- FIN PRUEBA ---
 
     while True:
         now = datetime.now(bogota_tz)
