@@ -19,6 +19,22 @@ HTML_DIR = os.path.join(DEBUG_DIR, "html")
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 os.makedirs(HTML_DIR, exist_ok=True)
 
+
+# Añade al inicio del main()
+def setup_environment():
+    """Configura entorno para evitar detección"""
+    # Limpiar variables de entorno de Selenium
+    os.environ.pop('SE_DRIVER_PATH', None)
+    os.environ.pop('SE_BINARY_PATH', None)
+
+    # Verificar Xvfb
+    display = os.environ.get('DISPLAY', ':99')
+    os.environ['DISPLAY'] = display
+
+    # Log de entorno
+    logging.info(f"DISPLAY configurado: {display}")
+    logging.info(f"Entorno Python: {sys.version}")
+
 def save_debug_page(driver, step_name="step", numero="unknown"):
     """Guarda screenshot y HTML para inspección."""
     from datetime import datetime
@@ -75,7 +91,7 @@ def probar_un_proceso(numero):
     worker.TOTAL_PROCESSES = 1
 
     # Crear driver headless
-    driver = new_chrome_driver(0, headless=True)
+    driver = new_chrome_driver(0)
 
     try:
         logging.info(f"🧪 Probando proceso {numero}")
