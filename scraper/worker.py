@@ -66,7 +66,6 @@ def wait_page_ready(driver, timeout=30):
 # --------------------------------------------------
 
 def debug_page(driver, numero=None, xpath_fecha=None):
-
     logging.error("\n========== DEBUG PAGE ==========")
 
     try:
@@ -74,31 +73,20 @@ def debug_page(driver, numero=None, xpath_fecha=None):
         logging.error("TITLE: %s", driver.title)
 
         body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
-
         logging.error("\n--- TEXTO DETECTADO ---\n")
         logging.error(body_text[:2000])
 
-        for word, label in [
-            ("captcha", "CAPTCHA"),
-            ("acceso restringido", "FIREWALL"),
-            ("cloudflare", "CLOUDFLARE"),
-            ("cargando", "LOADER VUE"),
-        ]:
-            if word in body_text:
-                logging.error("⚠️ %s DETECTADO", label)
-
-        if xpath_fecha:
-            cantidad = len(driver.find_elements(By.XPATH, xpath_fecha))
-            logging.error("Cantidad spans encontrados: %s", cantidad)
+        # Revisar errores de JS
+        for entry in driver.get_log('browser'):
+            logging.error("LOG JS: %s", entry)
 
         path = os.path.join(SCREENSHOT_DIR, f"debug_{numero}.png")
         driver.save_screenshot(path)
         logging.error("Screenshot guardado en %s", path)
-        html_path = os.path.join(HTML_DIR, f"debug_{numero}.html")
 
+        html_path = os.path.join(HTML_DIR, f"debug_{numero}.html")
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(driver.page_source)
-
         logging.error("HTML guardado en %s", html_path)
 
     except Exception as e:

@@ -7,16 +7,16 @@ import chromedriver_autoinstaller
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from .config import ENV
 
 logging.getLogger("selenium").setLevel(logging.WARNING)
 
-
 def new_chrome_driver(worker_id=None):
     # =========================
-    # DESCARGAR E INSTALAR CHROMEDRIVER
+    # INSTALAR CHROMEDRIVER CORRECTO
     # =========================
-    chromedriver_autoinstaller.install()  # descarga la versión correcta automáticamente
+    chromedriver_autoinstaller.install()
 
     opts = webdriver.ChromeOptions()
 
@@ -28,7 +28,7 @@ def new_chrome_driver(worker_id=None):
     opts.add_experimental_option("useAutomationExtension", False)
 
     # =========================
-    # FLAGS CRÍTICOS PARA VPS / DOCKER
+    # FLAGS CRÍTICOS VPS / DOCKER
     # =========================
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
@@ -51,14 +51,16 @@ def new_chrome_driver(worker_id=None):
     # HEADLESS Y USER-AGENT PARA PRODUCCIÓN
     # =========================
     if ENV.upper() == "PRODUCTION":
-        opts.add_argument("--headless=new")  # ⚡ Crucial para VPS
+        opts.add_argument("--headless=new")
         opts.add_argument("--remote-debugging-port=9222")
-        opts.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36")
+        opts.add_argument(
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
+        )
         opts.page_load_strategy = "eager"
 
     # =========================
-    # PERFIL AISLADO POR WORKER
+    # PERFIL AISLADO
     # =========================
     base = os.path.join(os.getcwd(), "tmp_profiles")
     os.makedirs(base, exist_ok=True)
@@ -67,29 +69,33 @@ def new_chrome_driver(worker_id=None):
     opts.add_argument(f"--user-data-dir={profile_dir}")
 
     # =========================
-    # CHROME BIN OPCIONAL (en Docker a veces es necesario)
+    # CHROME BIN OPCIONAL
     # =========================
     chrome_bin = os.environ.get("CHROME_BIN")
     if chrome_bin and os.path.isfile(chrome_bin):
         opts.binary_location = chrome_bin
 
     # =========================
+    # LOGGING DE JAVASCRIPT
+    # =========================
+    caps = DesiredCapabilities.CHROME.copy()
+    caps['goog:loggingPrefs'] = {'browser': 'ALL'}
+
+    # =========================
     # INICIAR DRIVER
     # =========================
     service = Service()
-    driver = webdriver.Chrome(service=service, options=opts)
+    driver = webdriver.Chrome(service=service, options=opts, desired_capabilities=caps)
 
     # =========================
     # ANTI DETECCIÓN
     # =========================
     driver.execute_script("""
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined
-        })
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
     """)
 
     # =========================
-    # ZONA HORARIA COLOMBIA
+    # ZONA HORARIA
     # =========================
     try:
         driver.execute_cdp_cmd(
@@ -102,7 +108,7 @@ def new_chrome_driver(worker_id=None):
     # =========================
     # TIMEOUTS
     # =========================
-    driver.set_page_load_timeout(120)  # Para SPAs con JS pesado
+    driver.set_page_load_timeout(120)
     driver.implicitly_wait(10)
 
     return driver
