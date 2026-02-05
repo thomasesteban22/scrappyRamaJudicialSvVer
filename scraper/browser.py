@@ -3,6 +3,7 @@
 import os
 import time
 import logging
+import chromedriver_autoinstaller
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -12,6 +13,10 @@ logging.getLogger("selenium").setLevel(logging.WARNING)
 
 
 def new_chrome_driver(worker_id=None):
+    # =========================
+    # INSTALAR CHROMEDRIVER CORRECTO
+    # =========================
+    chromedriver_autoinstaller.install()  # descarga e instala la versión correcta automáticamente
 
     opts = webdriver.ChromeOptions()
 
@@ -36,12 +41,10 @@ def new_chrome_driver(worker_id=None):
     # IDIOMA REAL COLOMBIA
     # =========================
     opts.add_argument("--lang=es-CO")
-
     prefs = {
         "profile.managed_default_content_settings.images": 2,
         "intl.accept_languages": "es-CO,es"
     }
-
     opts.add_experimental_option("prefs", prefs)
 
     # =========================
@@ -58,10 +61,8 @@ def new_chrome_driver(worker_id=None):
     # =========================
     base = os.path.join(os.getcwd(), "tmp_profiles")
     os.makedirs(base, exist_ok=True)
-
     stamp = worker_id if worker_id is not None else int(time.time() * 1000)
     profile_dir = os.path.join(base, f"profile_{stamp}")
-
     opts.add_argument(f"--user-data-dir={profile_dir}")
 
     # =========================
