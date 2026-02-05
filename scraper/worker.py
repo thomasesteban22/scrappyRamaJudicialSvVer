@@ -44,7 +44,7 @@ def wait_page_ready(driver, timeout=30):
 
     logging.info("Página cargó correctamente")
 
-    logging.info("Página cargó correctamente")
+
 
 def worker_task(numero, driver, results, actes, errors, lock):
     idx       = next(process_counter)
@@ -67,7 +67,6 @@ def worker_task(numero, driver, results, actes, errors, lock):
             logging.warning(f"{numero}: Mantenimiento detectado; durmiendo 30 min")
             time.sleep(1800)
             page.load()
-            wait_page_ready(driver)
             wait()
 
         # 2) Selecciono “Todos los Procesos”
