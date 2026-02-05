@@ -18,6 +18,12 @@ from page_objects import ConsultaProcesosPage
 
 
 DEBUG_SCRAPER = os.getenv("DEBUG_SCRAPER", "0") == "1"
+DEBUG_DIR = os.path.join(os.getcwd(), "debug")
+SCREENSHOT_DIR = os.path.join(DEBUG_DIR, "screenshots")
+HTML_DIR = os.path.join(DEBUG_DIR, "html")
+
+os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+os.makedirs(HTML_DIR, exist_ok=True)
 
 
 # Contador progreso
@@ -85,9 +91,15 @@ def debug_page(driver, numero=None, xpath_fecha=None):
             cantidad = len(driver.find_elements(By.XPATH, xpath_fecha))
             logging.error("Cantidad spans encontrados: %s", cantidad)
 
-        path = f"debug_{numero}.png" if numero else "debug.png"
+        path = os.path.join(SCREENSHOT_DIR, f"debug_{numero}.png")
         driver.save_screenshot(path)
         logging.error("Screenshot guardado en %s", path)
+        html_path = os.path.join(HTML_DIR, f"debug_{numero}.html")
+
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+
+        logging.error("HTML guardado en %s", html_path)
 
     except Exception as e:
         logging.error("Error durante debug_page: %s", str(e))
