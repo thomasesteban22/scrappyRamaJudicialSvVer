@@ -85,7 +85,7 @@ def new_chrome_driver(worker_id=None):
     # INICIAR DRIVER
     # =========================
     service = Service()
-    driver = webdriver.Chrome(service=service, options=opts, desired_capabilities=caps)
+    driver = webdriver.Chrome(service=service, options=opts)
 
     # =========================
     # ANTI DETECCIÓN
