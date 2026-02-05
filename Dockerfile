@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     libatk-bridge2.0-0 libgtk-3-0 \
     libx11-xcb1 libdrm2 libgbm1 \
     libxcomposite1 libxdamage1 libxrandr2 \
-    libcairo2 libpango1.0-0 libatspi2.0-0 \
+    libcairo2 libpango-1.0-0 libatspi2.0-0 \
     tzdata \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
