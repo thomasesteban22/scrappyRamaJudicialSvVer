@@ -102,9 +102,33 @@ def worker_task(numero, driver, results, actes, errors, lock):
             "//*[@id='mainContent']/div/div/div/div[2]/div/"
             "div/div[2]/div/table/tbody/tr/td[3]/div/button/span"
         )
-        spans = WebDriverWait(driver, 20).until(
-            EC.presence_of_all_elements_located((By.XPATH, xpath_fecha))
-        )
+        try:
+            spans = WebDriverWait(driver, 20).until(
+                EC.presence_of_all_elements_located((By.XPATH, xpath_fecha))
+            )
+
+        except TimeoutException:
+
+            logging.error("Timeout buscando resultados")
+            logging.error("URL: %s", driver.current_url)
+            logging.error("TITLE: %s", driver.title)
+
+            html = driver.page_source.lower()
+
+            if "captcha" in html:
+                logging.error("Bloqueo captcha detectado")
+
+            if "acceso restringido" in html:
+                logging.error("Bloqueo por firewall")
+
+            if "cloudflare" in html:
+                logging.error("Bloqueo cloudflare")
+
+            # guardar html para inspección manual
+            with open(f"debug_{numero}.html", "w", encoding="utf8") as f:
+                f.write(driver.page_source)
+
+            raise
         wait()
 
         # 6) Comparo cada fecha vs cutoff y busco la primera aceptada
