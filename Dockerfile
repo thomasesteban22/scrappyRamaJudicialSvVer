@@ -1,9 +1,15 @@
+# -------------------------------
+# Base image
+# -------------------------------
 FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV TZ=America/Bogota
 
+# -------------------------------
+# Dependencias del sistema
+# -------------------------------
 RUN apt-get update && apt-get install -y \
     wget curl unzip gnupg ca-certificates \
     fonts-liberation \
@@ -18,7 +24,9 @@ RUN apt-get update && apt-get install -y \
     && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
-# Chrome
+# -------------------------------
+# Google Chrome
+# -------------------------------
 RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor > /usr/share/keyrings/chrome.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
     > /etc/apt/sources.list.d/google-chrome.list \
@@ -26,16 +34,24 @@ RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearm
     && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
+# -------------------------------
 # Chromedriver (compatible con Chrome)
+# -------------------------------
 RUN LATEST=$(curl -sS chromedriver.storage.googleapis.com/LATEST_RELEASE) \
     && wget -O /tmp/chromedriver.zip "https://chromedriver.storage.googleapis.com/$LATEST/chromedriver_linux64.zip" \
     && unzip /tmp/chromedriver.zip -d /usr/local/bin/ \
     && chmod +x /usr/local/bin/chromedriver \
     && rm /tmp/chromedriver.zip
 
+# -------------------------------
+# Workspace y Python
+# -------------------------------
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
-CMD ["python", "-m", "scraper.main"]
+# -------------------------------
+# Comando por defecto usando Xvfb
+# -------------------------------
+CMD ["xvfb-run", "-a", "python", "-m", "scraper.main"]
