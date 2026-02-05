@@ -13,35 +13,94 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
+DEBUG_DIR = os.path.join(os.getcwd(), "debug")
+SCREENSHOT_DIR = os.path.join(DEBUG_DIR, "screenshots")
+HTML_DIR = os.path.join(DEBUG_DIR, "html")
+os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+os.makedirs(HTML_DIR, exist_ok=True)
+
+def save_debug_page(driver, step_name="step", numero="unknown"):
+    """Guarda screenshot y HTML para inspección."""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ss_path = os.path.join(SCREENSHOT_DIR, f"{numero}_{step_name}_{timestamp}.png")
+    html_path = os.path.join(HTML_DIR, f"{numero}_{step_name}_{timestamp}.html")
+    try:
+        driver.save_screenshot(ss_path)
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+        logging.info(f"[DEBUG] Captura guardada: {ss_path}, HTML guardado: {html_path}")
+    except Exception as e:
+        logging.error(f"[DEBUG] Error guardando debug: {e}")
+
 def probar_un_proceso(numero):
     """
     Ejecuta worker_task completo para UN solo proceso.
     Usar en VPS para debug sin scheduler ni threads.
+    Captura screenshots y HTML para cada paso importante.
     """
     import itertools, threading, logging
     from .browser import new_chrome_driver
     from .worker import worker_task
     import scraper.worker as worker
+    import os
+    from datetime import datetime
 
+    # Carpetas debug
+    DEBUG_DIR = os.path.join(os.getcwd(), "debug")
+    SCREENSHOT_DIR = os.path.join(DEBUG_DIR, "screenshots")
+    HTML_DIR = os.path.join(DEBUG_DIR, "html")
+    os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+    os.makedirs(HTML_DIR, exist_ok=True)
+
+    def save_debug_page(driver, step_name="step", numero="unknown"):
+        """Guarda screenshot y HTML para inspección."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ss_path = os.path.join(SCREENSHOT_DIR, f"{numero}_{step_name}_{timestamp}.png")
+        html_path = os.path.join(HTML_DIR, f"{numero}_{step_name}_{timestamp}.html")
+        try:
+            driver.save_screenshot(ss_path)
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
+            logging.info(f"[DEBUG] Captura guardada: {ss_path}, HTML guardado: {html_path}")
+        except Exception as e:
+            logging.error(f"[DEBUG] Error guardando debug: {e}")
+
+    # Inicialización de listas y lock
     results, actes, errors = [], [], []
     lock = threading.Lock()
 
-    # Reiniciar contadores
+    # Reiniciar contadores del worker
     worker.process_counter = itertools.count(1)
     worker.TOTAL_PROCESSES = 1
 
+    # Crear driver headless
     driver = new_chrome_driver(0, headless=True)
 
     try:
         logging.info(f"🧪 Probando proceso {numero}")
+
+        # Captura inicial
+        save_debug_page(driver, "inicio", numero)
+
+        # Ejecutar worker_task
         worker_task(numero, driver, results, actes, errors, lock)
+
+        # Captura final
+        save_debug_page(driver, "fin_task", numero)
+
         logging.info(f"✅ Prueba finalizada")
         logging.info(f"Actuaciones encontradas: {len(actes)}")
         logging.info(f"Errores: {len(errors)}")
+
     except Exception as e:
+        # Captura de error
+        save_debug_page(driver, "error", numero)
         logging.error(f"❌ Error en prueba: {e}")
+
     finally:
         driver.quit()
+        logging.info("Driver cerrado")
 
 # 1) Silencia TensorFlow y Chrome/DevTools
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
