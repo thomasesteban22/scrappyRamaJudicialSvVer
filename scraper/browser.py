@@ -14,6 +14,50 @@ from .config import ENV
 logging.getLogger("selenium").setLevel(logging.WARNING)
 
 
+def wait_for_tor_ready(timeout=180):
+    """Esperar a que TOR esté completamente listo."""
+    import requests
+    import time
+
+    logging.info("⏳ Esperando a que TOR se conecte...")
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        try:
+            session = requests.Session()
+            session.proxies = {
+                'http': 'socks5://127.0.0.1:9050',
+                'https': 'socks5://127.0.0.1:9050'
+            }
+            session.timeout = 10
+
+            response = session.get('https://api.ipify.org', timeout=15)
+
+            if response.status_code == 200:
+                tor_ip = response.text.strip()
+                # También probar sin proxy para comparar
+                try:
+                    direct_response = requests.get('https://api.ipify.org', timeout=10)
+                    direct_ip = direct_response.text.strip()
+
+                    if tor_ip != direct_ip:
+                        logging.info(f"✅ TOR listo: IP TOR={tor_ip}, IP Directa={direct_ip}")
+                        return True
+                    else:
+                        logging.warning(f"⚠️ Misma IP: {tor_ip} (TOR podría no estar funcionando)")
+                except:
+                    logging.info(f"✅ TOR respondiendo con IP: {tor_ip}")
+                    return True
+
+        except Exception as e:
+            elapsed = int(time.time() - start_time)
+            logging.info(f"⏳ Esperando TOR... ({elapsed}s/{timeout}s)")
+            time.sleep(5)
+
+    logging.error(f"❌ Timeout esperando TOR después de {timeout} segundos")
+    return False
+
+
 def new_chrome_driver(worker_id=None):
     """Driver que usa TOR."""
 
@@ -62,57 +106,38 @@ def new_chrome_driver(worker_id=None):
     options.add_argument('--allow-running-insecure-content')
 
     try:
-        # Iniciar driver
+        # 1. ESPERAR que TOR esté listo ANTES de crear driver
+        if not wait_for_tor_ready(timeout=120):
+            logging.warning("⚠️ TOR no está listo, continuando de todos modos...")
+
+        # 2. Crear driver (resto del código igual)
         service = ChromeService(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
 
-        # Eliminar rastros de automation
-        driver.execute_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-        """)
+        # 3. Verificar TOR en el navegador
+        driver.set_page_load_timeout(120)  # Aumentar timeout
 
-        # Timeouts
-        driver.set_page_load_timeout(90)  # Más tiempo para TOR
-        driver.implicitly_wait(20)
-
-        logging.info(f"✅ Driver {worker_id} creado con proxy TOR")
-
-        # Verificar conexión TOR
         try:
             driver.get("https://check.torproject.org")
-            time.sleep(3)
+            time.sleep(5)
+
             if "Congratulations" in driver.page_source:
-                logging.info("🎉 Conectado exitosamente a través de TOR")
+                logging.info("🎉 Navegando exitosamente a través de TOR")
+                # Obtener IP real
+                driver.get("https://api.ipify.org")
+                tor_ip = driver.find_element(By.TAG_NAME, "body").text.strip()
+                logging.info(f"🌐 IP actual a través de TOR: {tor_ip}")
             else:
-                logging.warning("⚠️ Podría no estar usando TOR")
-        except:
-            logging.warning("No se pudo verificar conexión TOR")
+                logging.warning("⚠️ No se detecta TOR en el navegador")
+
+        except Exception as e:
+            logging.warning(f"Error verificando TOR en navegador: {e}")
 
         return driver
 
     except Exception as e:
         logging.error(f"❌ Error creando driver: {e}")
-
-        # Fallback: intentar sin proxy
-        try:
-            logging.warning("Intentando sin proxy TOR...")
-            options = Options()
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--headless=new")
-            options.add_argument("--disable-web-security")
-            options.add_argument("--ignore-certificate-errors")
-
-            driver = webdriver.Chrome(options=options)
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-            logging.warning("⚠️ Driver creado SIN TOR (riesgo de bloqueo)")
-            return driver
-        except Exception as e2:
-            logging.error(f"❌ Error fatal: {e2}")
-            raise
+        raise
 
 
 def is_page_maintenance(driver):

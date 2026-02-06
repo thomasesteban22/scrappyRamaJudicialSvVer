@@ -191,27 +191,114 @@ def worker_task(numero, driver, results, actes, errors, lock):
         logging.info(f"[{idx}/{total}] Ejecutando consulta...")
 
         try:
-            # Buscar botón Consultar
+            # Tomar screenshot antes
+            save_debug_info(driver, numero, "05_antes_consultar")
+
+            # Método 1: Click normal
             consultar_btn = driver.find_element(By.XPATH,
                                                 "//button[.//span[contains(text(), 'Consultar')] and contains(@class, 'success')]"
                                                 )
 
-            # Tomar screenshot antes
-            save_debug_info(driver, numero, "05_antes_consultar")
+            # Hacer click con JavaScript (más confiable)
+            driver.execute_script("arguments[0].click();", consultar_btn)
+            logging.info("✅ Click en Consultar realizado con JavaScript")
 
-            # Hacer click con ActionChains para más realismo
-            actions = ActionChains(driver)
-            actions.move_to_element(consultar_btn)
-            actions.pause(random.uniform(0.2, 0.5))
-            actions.click()
-            actions.perform()
+            # ESPERAR MÁS TIEMPO para respuesta (TOR es lento)
+            time.sleep(15)  # Aumentar de 8 a 15 segundos
 
-            logging.info("✅ Click en Consultar realizado")
+            # Verificar si hay respuesta (buscar algún cambio en la página)
+            try:
+                # Buscar mensaje de "cargando" o "procesando"
+                loading_elements = driver.find_elements(By.XPATH,
+                                                        "//*[contains(text(), 'Cargando') or contains(text(), 'Procesando') or contains(text(), 'Buscando')]"
+                                                        )
+
+                if loading_elements:
+                    logging.info("⏳ Página mostrando indicador de carga, esperando más...")
+                    time.sleep(10)
+
+            except:
+                pass
+
+            # Tomar screenshot después de esperar
+            save_debug_info(driver, numero, "08_despues_consultar")
+
+            # Verificar si la página cambió (buscando resultados)
+            current_url = driver.current_url
+            logging.info(f"📄 URL después de consultar: {current_url}")
+
+            # Si la URL cambió, podría haber resultados
+            if "resultado" in current_url.lower() or "consulta" in current_url.lower():
+                logging.info("✅ URL sugiere que hay resultados")
 
         except Exception as e:
             logging.error(f"❌ Error haciendo click en Consultar: {e}")
-            save_debug_info(driver, numero, "06_error_click_consultar")
-            raise
+
+            # Intentar método alternativo: enviar formulario directamente
+            try:
+                logging.info("Intentando método alternativo: submit del formulario...")
+                form = driver.find_element(By.TAG_NAME, "form")
+                driver.execute_script("arguments[0].submit();", form)
+                time.sleep(10)
+            except Exception as e2:
+                logging.error(f"❌ Error método alternativo: {e2}")
+                raise
+            # ========== PASO 7: HACER CLICK EN CONSULTAR ==========
+        logging.info(f"[{idx}/{total}] Ejecutando consulta...")
+
+        try:
+            # Tomar screenshot antes
+            save_debug_info(driver, numero, "05_antes_consultar")
+
+            # Método 1: Click normal
+            consultar_btn = driver.find_element(By.XPATH,
+                                                "//button[.//span[contains(text(), 'Consultar')] and contains(@class, 'success')]"
+                                                )
+
+            # Hacer click con JavaScript (más confiable)
+            driver.execute_script("arguments[0].click();", consultar_btn)
+            logging.info("✅ Click en Consultar realizado con JavaScript")
+
+            # ESPERAR MÁS TIEMPO para respuesta (TOR es lento)
+            time.sleep(15)  # Aumentar de 8 a 15 segundos
+
+            # Verificar si hay respuesta (buscar algún cambio en la página)
+            try:
+                # Buscar mensaje de "cargando" o "procesando"
+                loading_elements = driver.find_elements(By.XPATH,
+                                                        "//*[contains(text(), 'Cargando') or contains(text(), 'Procesando') or contains(text(), 'Buscando')]"
+                                                        )
+
+                if loading_elements:
+                    logging.info("⏳ Página mostrando indicador de carga, esperando más...")
+                    time.sleep(10)
+
+            except:
+                pass
+
+            # Tomar screenshot después de esperar
+            save_debug_info(driver, numero, "08_despues_consultar")
+
+            # Verificar si la página cambió (buscando resultados)
+            current_url = driver.current_url
+            logging.info(f"📄 URL después de consultar: {current_url}")
+
+            # Si la URL cambió, podría haber resultados
+            if "resultado" in current_url.lower() or "consulta" in current_url.lower():
+                logging.info("✅ URL sugiere que hay resultados")
+
+        except Exception as e:
+            logging.error(f"❌ Error haciendo click en Consultar: {e}")
+
+            # Intentar método alternativo: enviar formulario directamente
+            try:
+                logging.info("Intentando método alternativo: submit del formulario...")
+                form = driver.find_element(By.TAG_NAME, "form")
+                driver.execute_script("arguments[0].submit();", form)
+                time.sleep(10)
+            except Exception as e2:
+                logging.error(f"❌ Error método alternativo: {e2}")
+                raise
 
         # ========== PASO 8: ESPERAR RESULTADOS Y VERIFICAR ==========
         logging.info(f"[{idx}/{total}] Esperando resultados...")

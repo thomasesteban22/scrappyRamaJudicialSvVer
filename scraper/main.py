@@ -295,6 +295,16 @@ def log_ip_salida():
 # ---------------- MAIN ---------------- #
 def main():
     logging.info("Iniciando scraper...")
+    try:
+        from .diagnostic import full_diagnostic
+        full_diagnostic()
+
+        # Preguntar si continuar
+        logging.info("\n¿Continuar con el scraping? (esperando 10 segundos...)")
+        time.sleep(10)
+
+    except ImportError:
+        logging.warning("No se pudo ejecutar diagnóstico completo")
 
     # Verificar TOR
     from .tor_check import check_tor, test_site_with_tor
