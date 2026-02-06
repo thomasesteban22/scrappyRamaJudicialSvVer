@@ -9,7 +9,7 @@ import chromedriver_autoinstaller
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+from selenium.webdriver.chrome.options import Options as ChromeOptions
 from .config import ENV
 
 logging.getLogger("selenium").setLevel(logging.WARNING)
@@ -23,7 +23,7 @@ def new_chrome_driver(worker_id=None):
     # =========================
     chromedriver_autoinstaller.install()
 
-    opts = webdriver.ChromeOptions()
+    opts = ChromeOptions()
 
     # =========================
     # ANTI-DETECCIÓN AVANZADA
@@ -117,33 +117,45 @@ def new_chrome_driver(worker_id=None):
         opts.binary_location = chrome_bin
 
     # =========================
-    # LOGGING Y CAPABILITIES
+    # LOGGING PARA SELENIUM 4
     # =========================
-    caps = DesiredCapabilities.CHROME.copy()
-    caps['goog:loggingPrefs'] = {'browser': 'SEVERE', 'performance': 'ALL'}
-    caps['acceptInsecureCerts'] = True
+    # En Selenium 4, las capabilities se pasan a través de options
+    opts.set_capability('goog:loggingPrefs', {'browser': 'SEVERE', 'performance': 'ALL'})
+    opts.set_capability('acceptInsecureCerts', True)
 
     # =========================
-    # INICIAR DRIVER
+    # INICIAR DRIVER (SELENIUM 4)
     # =========================
     service = None
+    driver = None
+
     try:
-        # Intentar con Service primero
+        # Configurar Service para Selenium 4
         service = Service(
-            executable_path=os.environ.get("CHROMEDRIVER_PATH", "/usr/local/bin/chromedriver"),
-            service_args=['--verbose']
+            executable_path=os.environ.get("CHROMEDRIVER_PATH", "/usr/local/bin/chromedriver")
         )
-        driver = webdriver.Chrome(service=service, options=opts, desired_capabilities=caps)
+
+        # Iniciar driver con Selenium 4 syntax
+        driver = webdriver.Chrome(service=service, options=opts)
+
     except Exception as e:
         logging.warning(f"Error con Service, intentando sin él: {e}")
         try:
-            driver = webdriver.Chrome(options=opts, desired_capabilities=caps)
+            # Fallback sin Service
+            driver = webdriver.Chrome(options=opts)
         except Exception as e2:
             logging.error(f"Error crítico iniciando Chrome: {e2}")
-            raise
+            # Último intento con ruta explícita
+            try:
+                from selenium.webdriver.chrome.service import Service as ChromeService
+                service = ChromeService(executable_path='/usr/local/bin/chromedriver')
+                driver = webdriver.Chrome(service=service, options=opts)
+            except Exception as e3:
+                logging.error(f"Fallo total iniciando Chrome: {e3}")
+                raise
 
     # =========================
-    # ANTI-DETECCIÓN: ELIMINAR RASTROS
+    # ANTI-DETECCIÓN: ELIMINAR RASTROS (SELENIUM 4)
     # =========================
     try:
         # Quitar propiedad webdriver
@@ -182,7 +194,7 @@ def new_chrome_driver(worker_id=None):
             );
         """)
 
-        # CDP Commands para modificar navigator
+        # CDP Commands para modificar navigator (Selenium 4)
         driver.execute_cdp_cmd('Network.setUserAgentOverride', {
             "userAgent": driver.execute_script("return navigator.userAgent"),
             "platform": "Win32",

@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
     libx11-xcb1 libdrm2 libgbm1 \
     libxcomposite1 libxdamage1 libxrandr2 \
     libcairo2 libpango-1.0-0 libatspi2.0-0 \
-    xvfb \
+    xvfb xauth \
     tzdata \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
@@ -37,7 +37,11 @@ RUN LATEST=$(curl -sS chromedriver.storage.googleapis.com/LATEST_RELEASE) \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Crear directorios debug
+RUN mkdir -p /app/debug/screenshots /app/debug/html /app/output
+
 COPY . .
 
-# Comando simple que inicia Xvfb y ejecuta Python con logs visibles
+# Comando simple
 CMD sh -c "Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & export DISPLAY=:99 && sleep 3 && python -m scraper.main"
