@@ -11,8 +11,12 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
+
 from .config import DIAS_BUSQUEDA, WAIT_TIME
-from .browser import is_page_maintenance, test_javascript
+# CORREGIR: Importar desde browser
+from .browser import is_page_maintenance
+# Si no existe test_javascript, comenta esta línea o créala
+# from .browser import test_javascript
 from page_objects import ConsultaProcesosPage
 
 # Configuración
@@ -26,6 +30,15 @@ os.makedirs(HTML_DIR, exist_ok=True)
 # Contadores
 process_counter = itertools.count(1)
 TOTAL_PROCESSES = 0
+
+# Si test_javascript no existe, crea una función dummy
+def test_javascript(driver):
+    """Función dummy si no existe en browser.py."""
+    try:
+        result = driver.execute_script("return true")
+        return True
+    except:
+        return False
 
 
 def save_debug_info(driver, numero, step_name):

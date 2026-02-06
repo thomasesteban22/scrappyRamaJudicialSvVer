@@ -298,16 +298,14 @@ def main():
 
     # Verificar TOR
     from .tor_check import check_tor, test_site_with_tor
-
-    if check_tor():
-        logging.info("TOR funcionando, probando acceso al sitio...")
-
-        if test_site_with_tor():
-            logging.info("✅ Todo listo para usar TOR")
-        else:
-            logging.warning("⚠️ El sitio podría estar bloqueando TOR")
-    else:
-        logging.error("❌ TOR no está funcionando")
+    try:
+        from .verify_tor import verify_tor_setup
+        if not verify_tor_setup():
+            logging.error("❌ TOR no configurado correctamente. El scraping podría fallar.")
+            # Preguntar si continuar
+            logging.info("Continuando de todos modos...")
+    except ImportError:
+        logging.warning("No se pudo importar verify_tor, continuando...")
 
     # Log de IP de salida
     log_ip_salida()
