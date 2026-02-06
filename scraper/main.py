@@ -294,7 +294,20 @@ def log_ip_salida():
 
 # ---------------- MAIN ---------------- #
 def main():
-    logging.info("Scheduler iniciado, esperando el primer ciclo diario...")
+    logging.info("Iniciando scraper...")
+
+    # Verificar TOR
+    from .tor_check import check_tor, test_site_with_tor
+
+    if check_tor():
+        logging.info("TOR funcionando, probando acceso al sitio...")
+
+        if test_site_with_tor():
+            logging.info("✅ Todo listo para usar TOR")
+        else:
+            logging.warning("⚠️ El sitio podría estar bloqueando TOR")
+    else:
+        logging.error("❌ TOR no está funcionando")
 
     # Log de IP de salida
     log_ip_salida()
