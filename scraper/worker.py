@@ -1,36 +1,32 @@
-# scraper/worker.py
+# scraper/worker.py - VERSIÓN CORREGIDA
+
 import time
 import random
 import logging
 import itertools
 import os
-import requests
 from datetime import date, timedelta, datetime
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-from .config import DIAS_BUSQUEDA, WAIT_TIME
-from .browser import is_page_maintenance, test_javascript, handle_modal_error, wait_for_tor_circuit
-from page_objects import ConsultaProcesosPage
+from .config import DIAS_BUSQUEDA
+from .browser import is_page_maintenance, test_javascript, wait_for_tor_circuit
 
 # Configuración
 DEBUG_DIR = os.path.join(os.getcwd(), "debug")
 SCREENSHOT_DIR = os.path.join(DEBUG_DIR, "screenshots")
 HTML_DIR = os.path.join(DEBUG_DIR, "html")
-
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 os.makedirs(HTML_DIR, exist_ok=True)
 
-# Contadores
 process_counter = itertools.count(1)
 TOTAL_PROCESSES = 0
 
 
-def save_debug_info(driver, numero, step_name, extra_info=""):
-    """Guarda screenshot y HTML con timestamp."""
+def save_debug_info(driver, numero, step_name):
+    """Guarda screenshot y HTML."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     ss_path = os.path.join(SCREENSHOT_DIR, f"{numero}_{step_name}_{timestamp}.png")
     html_path = os.path.join(HTML_DIR, f"{numero}_{step_name}_{timestamp}.html")
@@ -40,287 +36,229 @@ def save_debug_info(driver, numero, step_name, extra_info=""):
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(driver.page_source)
         logging.info(f"📸 {step_name}: Screenshot guardado")
-        if extra_info:
-            logging.info(f"   ℹ️ {extra_info}")
     except Exception as e:
         logging.error(f"Error guardando debug {step_name}: {e}")
-
-
-def extract_process_data(driver, numero):
-    """Extrae los datos del proceso de la tabla de resultados."""
-    try:
-        # Esperar a que cargue la tabla
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.XPATH, "//table//tbody//tr"))
-        )
-
-        # Encontrar la fila del proceso
-        row = driver.find_element(By.XPATH, "//table//tbody//tr")
-        cells = row.find_elements(By.TAG_NAME, "td")
-
-        if len(cells) >= 5:
-            # Número de radicación (cell 1)
-            try:
-                numero_element = cells[1].find_element(By.TAG_NAME, "button")
-                numero_proceso = numero_element.text.strip()
-            except:
-                numero_proceso = cells[1].text.strip()
-
-            # Fecha de última actuación (cell 2) - ¡LO MÁS IMPORTANTE!
-            fecha_text = None
-            fecha_element = None
-            try:
-                fecha_element = cells[2].find_element(By.TAG_NAME, "button")
-                fecha_text = fecha_element.text.strip()
-            except:
-                fecha_text = cells[2].text.strip()
-
-            # Despacho (cell 3)
-            despacho = cells[3].text.strip() if len(cells) > 3 else ""
-
-            # Sujetos procesales (cell 4)
-            sujetos = cells[4].text.strip() if len(cells) > 4 else ""
-
-            # Parsear fecha
-            fecha_obj = None
-            if fecha_text:
-                try:
-                    fecha_obj = datetime.strptime(fecha_text, "%Y-%m-%d").date()
-                except ValueError:
-                    try:
-                        fecha_obj = datetime.strptime(fecha_text, "%d/%m/%Y").date()
-                    except ValueError:
-                        logging.warning(f"   ⚠️ No se pudo parsear fecha: {fecha_text}")
-
-            return {
-                'numero': numero_proceso,
-                'fecha_text': fecha_text,
-                'fecha_obj': fecha_obj,
-                'fecha_element': fecha_element,
-                'despacho': despacho,
-                'sujetos': sujetos
-            }
-
-    except Exception as e:
-        logging.error(f"   ❌ Error extrayendo datos: {e}")
-
-    return None
-
-
-def extract_actuaciones(driver, numero, cutoff):
-    """Extrae las actuaciones de la tabla de actuaciones."""
-    actuaciones_encontradas = 0
-
-    try:
-        # XPATHs posibles para la tabla de actuaciones
-        xpaths_actuaciones = [
-            "//table[contains(@class, 'v-data-table')]",
-            "//div[contains(@class, 'v-data-table')]//table",
-            "//table[.//th[contains(text(), 'Actuación')]]",
-            "//table[.//th[contains(text(), 'Fecha')]]",
-            "//main//table[.//td]"
-        ]
-
-        actuaciones_table = None
-        for xpath in xpaths_actuaciones:
-            try:
-                tables = driver.find_elements(By.XPATH, xpath)
-                for table in tables:
-                    rows = table.find_elements(By.XPATH, ".//tbody//tr")
-                    if len(rows) > 0:
-                        # Verificar que sea la tabla correcta (tiene fechas)
-                        first_row_cells = rows[0].find_elements(By.TAG_NAME, "td")
-                        if len(first_row_cells) >= 3:
-                            fecha_test = first_row_cells[0].text.strip()
-                            if '-' in fecha_test or '/' in fecha_test:
-                                actuaciones_table = table
-                                logging.info(f"   ✅ Tabla de actuaciones encontrada")
-                                break
-                if actuaciones_table:
-                    break
-            except:
-                continue
-
-        if actuaciones_table:
-            rows = actuaciones_table.find_elements(By.XPATH, ".//tbody//tr")
-            logging.info(f"   📊 Total actuaciones encontradas: {len(rows)}")
-
-            for row in rows:
-                try:
-                    cells = row.find_elements(By.TAG_NAME, "td")
-
-                    if len(cells) >= 3:
-                        fecha_act_text = cells[0].text.strip()
-                        actuacion_text = cells[1].text.strip()
-                        anotacion_text = cells[2].text.strip() if len(cells) > 2 else ""
-
-                        # Parsear fecha
-                        try:
-                            fecha_act = datetime.strptime(fecha_act_text, "%Y-%m-%d").date()
-                        except ValueError:
-                            try:
-                                fecha_act = datetime.strptime(fecha_act_text, "%d/%m/%Y").date()
-                            except ValueError:
-                                continue
-
-                        # Solo guardar si está dentro del período
-                        if fecha_act >= cutoff:
-                            logging.info(f"      ✅ {fecha_act}: {actuacion_text[:50]}...")
-                            yield {
-                                'fecha': fecha_act.isoformat(),
-                                'actuacion': actuacion_text,
-                                'anotacion': anotacion_text
-                            }
-                            actuaciones_encontradas += 1
-                        else:
-                            logging.info(f"      ⏭️ {fecha_act}: fuera de período")
-
-                except Exception as e:
-                    logging.debug(f"      ⚠️ Error procesando fila: {e}")
-                    continue
-
-            logging.info(f"   📝 Total actuaciones en período: {actuaciones_encontradas}")
-        else:
-            logging.warning("   ⚠️ No se encontró tabla de actuaciones")
-            save_debug_info(driver, numero, "sin_tabla_actuaciones")
-
-    except Exception as e:
-        logging.error(f"   ❌ Error extrayendo actuaciones: {e}")
-
-    return actuaciones_encontradas
 
 
 def worker_task(numero, driver, results, actes, errors, lock):
     idx = next(process_counter)
     total = TOTAL_PROCESSES or idx
-    remaining = total - idx
 
     logging.info(f"\n{'=' * 60}")
-    logging.info(f"🚀 [{idx}/{total}] INICIANDO PROCESO {numero} (faltan {remaining})")
+    logging.info(f"🚀 [{idx}/{total}] INICIANDO PROCESO {numero}")
     logging.info(f"{'=' * 60}")
 
     cutoff = date.today() - timedelta(days=DIAS_BUSQUEDA)
-    logging.info(f"📅 Fecha corte: {cutoff} (últimos {DIAS_BUSQUEDA} días)")
 
     try:
         # ========== PASO 1: VERIFICAR TOR ==========
-        logging.info(f"[{idx}/{total}] 🔍 Verificando TOR...")
         if not wait_for_tor_circuit(timeout=30):
-            logging.error(f"[{idx}/{total}] ❌ TOR no listo, reintentando...")
-            time.sleep(15)
-            if not wait_for_tor_circuit(timeout=30):
-                raise Exception("TOR no disponible después de reintento")
+            logging.warning(f"[{idx}/{total}] ⚠️ TOR no listo, continuando...")
 
-        # ========== PASO 2: CONSULTA DIRECTA ==========
-        consulta_url = f"https://consultaprocesos.ramajudicial.gov.co/Procesos/NumeroRadicacion?numeroRadicacion={numero}"
-        logging.info(f"[{idx}/{total}] 🌐 Navegando a URL directa...")
-        driver.get(consulta_url)
-        time.sleep(8)
+        # ========== PASO 2: CARGAR PÁGINA DE CONSULTA ==========
+        logging.info(f"[{idx}/{total}] 🌐 Cargando página de consulta...")
+        driver.get("https://consultaprocesos.ramajudicial.gov.co/Procesos/NumeroRadicacion")
+        time.sleep(5)
+        save_debug_info(driver, numero, "01_pagina_cargada")
 
-        save_debug_info(driver, numero, "01_consulta_directa")
+        # ========== PASO 3: ESPERAR QUE EL CAMPO DE TEXTO ESTÉ DISPONIBLE ==========
+        try:
+            # Esperar explícitamente por el campo de texto
+            input_field = WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.XPATH, "//input[@maxlength='23']"))
+            )
+            logging.info(f"[{idx}/{total}] ✅ Campo de texto encontrado")
+        except TimeoutException:
+            logging.error(f"[{idx}/{total}] ❌ No se encontró el campo de texto")
+            save_debug_info(driver, numero, "02_error_no_input")
+            raise Exception("Campo de texto no encontrado")
 
-        # ========== PASO 3: VERIFICAR Y MANEJAR MODAL DE ERROR ==========
-        if handle_modal_error(driver, numero):
-            logging.info(f"[{idx}/{total}] ✅ Modal manejado, reintentando...")
-            driver.get(consulta_url)
-            time.sleep(8)
-            save_debug_info(driver, numero, "02_reintento_consulta")
+        # ========== PASO 4: INGRESAR EL NÚMERO DE RADICACIÓN ==========
+        logging.info(f"[{idx}/{total}] ✍️ Ingresando número: {numero}")
 
-        # ========== PASO 4: VERIFICAR JAVASCRIPT ==========
-        logging.info(f"[{idx}/{total}] 🔧 Verificando JavaScript...")
-        test_javascript(driver)
+        # Limpiar campo primero
+        input_field.clear()
+        time.sleep(0.5)
 
-        # ========== PASO 5: EXTRACCIÓN DE DATOS DEL PROCESO ==========
-        logging.info(f"[{idx}/{total}] 📋 Extrayendo datos del proceso...")
-        process_data = extract_process_data(driver, numero)
+        # Ingresar número carácter por carácter (simula escritura humana)
+        for char in str(numero):
+            input_field.send_keys(char)
+            time.sleep(random.uniform(0.05, 0.1))
 
-        if not process_data:
-            logging.warning(f"[{idx}/{total}] ⚠️ No se encontraron datos del proceso")
-            save_debug_info(driver, numero, "sin_datos_proceso")
-            return
+        # Verificar que se ingresó correctamente
+        entered_value = input_field.get_attribute("value")
+        logging.info(f"[{idx}/{total}] ✅ Número ingresado: {entered_value}")
 
-        # Mostrar información del proceso
-        logging.info(f"   📋 Número: {process_data['numero']}")
-        logging.info(f"   📅 Fecha: {process_data['fecha_text']}")
-        logging.info(f"   🏛️ Despacho: {process_data['despacho'][:50]}...")
+        # Buscar el contador para verificar
+        try:
+            counter = driver.find_element(By.XPATH, "//div[contains(@class, 'v-counter')]")
+            counter_text = counter.text
+            logging.info(f"[{idx}/{total}] 📊 Contador: {counter_text}")
+        except:
+            pass
 
-        # ========== PASO 6: VERIFICAR SI LA FECHA ESTÁ DENTRO DEL PERÍODO ==========
-        if process_data['fecha_obj'] and process_data['fecha_obj'] >= cutoff:
-            logging.info(f"[{idx}/{total}] 🎯 Fecha {process_data['fecha_obj']} DENTRO del período")
+        save_debug_info(driver, numero, "03_numero_ingresado")
 
-            # ========== PASO 7: HACER CLICK EN LA FECHA ==========
-            if process_data['fecha_element']:
-                logging.info(f"[{idx}/{total}] 👆 Haciendo click en la fecha...")
+        # Pequeña pausa antes de hacer click
+        time.sleep(random.uniform(1, 2))
 
+        # ========== PASO 5: SELECCIONAR "TODOS LOS PROCESOS" ==========
+        try:
+            # Buscar el radio button de "Todos los Procesos"
+            radio_buttons = driver.find_elements(By.XPATH,
+                                                 "//div[contains(@class, 'v-radio')]//label"
+                                                 )
+
+            for radio in radio_buttons:
+                if "Todos los Procesos" in radio.text:
+                    logging.info(f"[{idx}/{total}] 🔘 Seleccionando: {radio.text}")
+                    radio.click()
+                    time.sleep(1)
+                    break
+        except Exception as e:
+            logging.warning(f"[{idx}/{total}] ⚠️ No se pudo seleccionar radio button: {e}")
+
+        # ========== PASO 6: HACER CLICK EN CONSULTAR ==========
+        logging.info(f"[{idx}/{total}] 🖱️ Haciendo click en Consultar...")
+
+        try:
+            # Buscar el botón Consultar
+            consultar_btn = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH,
+                                            "//button[.//span[contains(text(), 'Consultar')]]"
+                                            ))
+            )
+
+            # Hacer click con JavaScript (más confiable)
+            driver.execute_script("arguments[0].click();", consultar_btn)
+            logging.info(f"[{idx}/{total}] ✅ Click en Consultar ejecutado")
+
+        except Exception as e:
+            logging.error(f"[{idx}/{total}] ❌ Error haciendo click: {e}")
+            # Intentar submit del formulario
+            try:
+                form = driver.find_element(By.TAG_NAME, "form")
+                driver.execute_script("arguments[0].submit();", form)
+                logging.info(f"[{idx}/{total}] ✅ Submit del formulario ejecutado")
+            except:
+                raise
+
+        # ========== PASO 7: ESPERAR RESULTADOS ==========
+        logging.info(f"[{idx}/{total}] ⏳ Esperando resultados...")
+        time.sleep(15)  # TOR es lento, esperar más
+
+        save_debug_info(driver, numero, "04_despues_consultar")
+
+        # ========== PASO 8: BUSCAR TABLA DE RESULTADOS ==========
+        try:
+            # Esperar a que aparezca alguna tabla
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.XPATH, "//table"))
+            )
+
+            tables = driver.find_elements(By.XPATH, "//table")
+            logging.info(f"[{idx}/{total}] ✅ Encontradas {len(tables)} tablas")
+
+            # Buscar tabla con resultados
+            for table in tables:
                 try:
-                    # Scroll hasta el elemento
-                    driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
-                                          process_data['fecha_element'])
-                    time.sleep(2)
+                    rows = table.find_elements(By.XPATH, ".//tbody//tr")
+                    if rows:
+                        logging.info(f"[{idx}/{total}] 📋 Tabla con {len(rows)} filas encontrada")
+                        save_debug_info(driver, numero, "05_tabla_resultados")
 
-                    # Click con JavaScript
-                    driver.execute_script("arguments[0].click();", process_data['fecha_element'])
-                    logging.info(f"   ✅ Click en fecha ejecutado")
+                        # Extraer datos de la primera fila
+                        cells = rows[0].find_elements(By.TAG_NAME, "td")
 
-                    # Esperar a que cargue la página de actuaciones
-                    time.sleep(8)
+                        if len(cells) >= 3:
+                            # Número de radicación
+                            try:
+                                num_btn = cells[1].find_element(By.TAG_NAME, "button")
+                                proceso_num = num_btn.text.strip()
+                            except:
+                                proceso_num = cells[1].text.strip()
+                            logging.info(f"[{idx}/{total}] 📌 Proceso: {proceso_num}")
 
-                    save_debug_info(driver, numero, "03_click_fecha")
+                            # Fecha de última actuación
+                            try:
+                                fecha_btn = cells[2].find_element(By.TAG_NAME, "button")
+                                fecha_text = fecha_btn.text.strip()
+                                logging.info(f"[{idx}/{total}] 📅 Fecha: {fecha_text}")
 
-                    # ========== PASO 8: EXTRAER ACTUACIONES ==========
-                    logging.info(f"[{idx}/{total}] 📝 Extrayendo actuaciones...")
-                    actuaciones_guardadas = 0
+                                # Parsear fecha
+                                fecha_obj = datetime.strptime(fecha_text, "%Y-%m-%d").date()
 
-                    for actuacion in extract_actuaciones(driver, numero, cutoff):
-                        with lock:
-                            actes.append((
-                                numero,
-                                actuacion['fecha'],
-                                actuacion['actuacion'],
-                                actuacion['anotacion'],
-                                driver.current_url
-                            ))
-                        actuaciones_guardadas += 1
+                                if fecha_obj >= cutoff:
+                                    logging.info(f"[{idx}/{total}] 🎯 Fecha DENTRO del período")
 
-                    logging.info(f"[{idx}/{total}] ✅ {actuaciones_guardadas} actuaciones guardadas")
+                                    # Hacer click en la fecha
+                                    driver.execute_script("arguments[0].click();", fecha_btn)
+                                    time.sleep(8)
 
-                    # ========== PASO 9: VOLVER A RESULTADOS ==========
-                    try:
-                        # Buscar botón Volver
-                        volver_btn = driver.find_element(By.XPATH,
-                                                         "//button[contains(text(), 'Volver') or contains(@title, 'Volver')]"
-                                                         )
-                        driver.execute_script("arguments[0].click();", volver_btn)
-                        logging.info(f"   ↩️ Volviendo a resultados...")
-                        time.sleep(5)
-                    except:
-                        # Si no encuentra botón, navegar directamente
-                        logging.info(f"   ↩️ Navegando directamente a URL de consulta...")
-                        driver.get(consulta_url)
-                        time.sleep(5)
+                                    save_debug_info(driver, numero, "06_click_fecha")
 
-                except Exception as e:
-                    logging.error(f"   ❌ Error haciendo click en fecha: {e}")
-                    save_debug_info(driver, numero, "error_click_fecha", str(e))
-            else:
-                logging.warning(f"   ⚠️ No se encontró elemento de fecha para hacer click")
-        else:
-            if process_data['fecha_obj']:
-                logging.info(f"[{idx}/{total}] ⏭️ Fecha {process_data['fecha_obj']} FUERA del período")
-            else:
-                logging.info(f"[{idx}/{total}] ⏭️ No se pudo determinar fecha")
+                                    # ========== PASO 9: EXTRAER ACTUACIONES ==========
+                                    # Buscar tabla de actuaciones
+                                    try:
+                                        act_tables = driver.find_elements(By.XPATH, "//table")
+                                        for act_table in act_tables:
+                                            act_rows = act_table.find_elements(By.XPATH, ".//tbody//tr")
+                                            if len(act_rows) > 1:  # Más de 1 fila (header + datos)
+                                                logging.info(
+                                                    f"[{idx}/{total}] 📝 Encontradas {len(act_rows) - 1} actuaciones")
 
-        # ========== PASO 10: REGISTRAR RESULTADO ==========
+                                                for row in act_rows[1:]:  # Saltar header
+                                                    act_cells = row.find_elements(By.TAG_NAME, "td")
+                                                    if len(act_cells) >= 3:
+                                                        act_fecha = act_cells[0].text.strip()
+                                                        act_nombre = act_cells[1].text.strip()
+                                                        act_anotacion = act_cells[2].text.strip()
+
+                                                        try:
+                                                            act_fecha_obj = datetime.strptime(act_fecha,
+                                                                                              "%Y-%m-%d").date()
+                                                            if act_fecha_obj >= cutoff:
+                                                                with lock:
+                                                                    actes.append((
+                                                                        numero,
+                                                                        act_fecha,
+                                                                        act_nombre,
+                                                                        act_anotacion,
+                                                                        driver.current_url
+                                                                    ))
+                                                                logging.info(
+                                                                    f"      ✅ Actuación {act_fecha}: {act_nombre[:50]}...")
+                                                        except:
+                                                            continue
+                                                break
+                                    except Exception as e:
+                                        logging.error(f"Error extrayendo actuaciones: {e}")
+
+                                    # Volver
+                                    driver.back()
+                                    time.sleep(5)
+                                else:
+                                    logging.info(f"[{idx}/{total}] ⏭️ Fecha FUERA del período")
+                            except Exception as e:
+                                logging.warning(f"[{idx}/{total}] ⚠️ No se pudo extraer fecha: {e}")
+                        break
+                except:
+                    continue
+
+        except TimeoutException:
+            logging.warning(f"[{idx}/{total}] ⚠️ No se encontraron tablas de resultados")
+            save_debug_info(driver, numero, "05_sin_resultados")
+
+        # ========== PASO 10: FINALIZAR ==========
         with lock:
-            results.append((numero, consulta_url))
+            results.append((numero, driver.current_url))
 
         logging.info(f"[{idx}/{total}] ✅ Proceso {numero} COMPLETADO")
         save_debug_info(driver, numero, "99_completado")
 
     except Exception as e:
-        logging.error(f"❌ [{idx}/{total}] Error en proceso {numero}: {str(e)[:200]}")
-        save_debug_info(driver, numero, "99_error", str(e)[:200])
-
+        logging.error(f"❌ [{idx}/{total}] Error: {e}")
+        save_debug_info(driver, numero, "99_error")
         with lock:
-            errors.append((numero, str(e)[:200]))
+            errors.append((numero, str(e)))
         raise
