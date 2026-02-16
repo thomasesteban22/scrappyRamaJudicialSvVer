@@ -11,7 +11,8 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 )
 
-from .config import PDF_PATH, LOG_TXT_PATH, DIAS_BUSQUEDA
+from .config import PDF_PATH, DIAS_BUSQUEDA  # Eliminado LOG_TXT_PATH
+from .logger import log  # Añadido logger
 
 # Nombres de los días de la semana en español
 DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
@@ -140,18 +141,7 @@ def generar_pdf(total_procesos, actes, errors, start_ts, end_ts):
     else:
         elements.append(Paragraph("No hubo errores en ningún proceso.", styles['Normal']))
 
-    # --- Generar y volcar log de texto
+    # --- Generar PDF
     doc.build(elements)
-    print(f"PDF generado: {PDF_PATH}")
+    log.exito(f"PDF generado: {PDF_PATH}")  # Cambiado de print a log
 
-    with open(LOG_TXT_PATH, "w", encoding="utf-8") as f:
-        f.write(f"Reporte generado: {datetime.now()}\n")
-        f.write(
-            f"Total: {total_procesos}, Escaneados: {escaneos}, "
-            f"Con actuaciones: {con_actos}, Sin actuaciones: {sin_actos}, Errores: {errores}\n\n"
-        )
-        if errors:
-            for num, msg in errors:
-                f.write(f"{num} → {msg}\n")
-        else:
-            f.write("Cero errores.\n")
