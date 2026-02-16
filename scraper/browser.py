@@ -1,7 +1,6 @@
 # scraper/browser.py
 import os
 import random
-import logging
 import time
 import requests
 from selenium import webdriver
@@ -11,25 +10,25 @@ from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service as ChromeService
 from .config import ENV
+from .logger import log
 
-logging.getLogger("selenium").setLevel(logging.WARNING)
-logging.getLogger("webdriver_manager").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
+# ========== SILENCIAR LOGS EXTERNOS ==========
+# Ya están silenciados en logger.py, pero por si acaso:
+os.environ['WDM_LOG_LEVEL'] = '0'
+os.environ['WDM_PRINT_FIRST_LINE'] = 'False'
+os.environ['TOR_LOG'] = 'notice stderr'
 
 
 def wait_for_tor_circuit(timeout=120):
     """
     Espera ACTIVAMENTE hasta que TOR tenga un circuito de salida funcionando.
-    No solo espera tiempo, sino que VERIFICA que puede salir a internet.
+    AHORA: Solo muestra logs en consola si son importantes.
+    Todos los logs detallados van al archivo.
     """
-    import requests
-    import time
-
-    logging.info("=" * 60)
-    logging.info("🔍 VERIFICANDO CIRCUITO TOR")
-    logging.info("=" * 60)
-
     start_time = time.time()
+
+    # Mensaje inicial (solo una vez, va al archivo)
+    log.tor("Verificando circuito TOR...")
 
     # 1. Obtener IP directa (sin proxy)
     direct_ip = None
@@ -37,12 +36,14 @@ def wait_for_tor_circuit(timeout=120):
         direct_response = requests.get('https://api.ipify.org', timeout=10)
         if direct_response.status_code == 200:
             direct_ip = direct_response.text.strip()
-            logging.info(f"   📡 IP Directa: {direct_ip}")
+            log.tor(f"IP Directa: {direct_ip}")
     except Exception as e:
-        logging.warning(f"   ⚠️ No se pudo obtener IP directa: {e}")
+        log.tor(f"No se pudo obtener IP directa: {e}")
 
     # 2. Intentar con TOR hasta que funcione
     attempt = 0
+    last_log_time = 0
+
     while time.time() - start_time < timeout:
         attempt += 1
         try:
@@ -61,41 +62,44 @@ def wait_for_tor_circuit(timeout=120):
 
                 # Verificar que NO es la misma IP directa
                 if direct_ip and tor_ip != direct_ip:
-                    logging.info(f"   ✅ TOR LISTO! IP: {tor_ip} (diferente a {direct_ip})")
-                    logging.info(f"   ⏱️  Tiempo de espera: {int(time.time() - start_time)}s")
+                    elapsed = int(time.time() - start_time)
+                    log.tor(f"✅ TOR LISTO! IP: {tor_ip} (en {elapsed}s)")
+                    # Mensaje corto en consola
+                    log.info(f"TOR listo ({elapsed}s)")
                     return True
                 elif not direct_ip:
-                    logging.info(f"   ✅ TOR responde con IP: {tor_ip}")
+                    log.tor(f"✅ TOR responde con IP: {tor_ip}")
+                    log.info("TOR listo")
                     return True
                 else:
-                    logging.warning(f"   ⚠️ TOR tiene misma IP que directa ({tor_ip}) - aún no listo")
+                    log.tor(f"⚠️ TOR tiene misma IP que directa ({tor_ip})")
 
-        except requests.exceptions.ConnectionError as e:
-            if "SOCKS" in str(e):
-                elapsed = int(time.time() - start_time)
-                logging.info(f"   ⏳ TOR iniciando... ({elapsed}s/{timeout}s)")
-            else:
-                logging.debug(f"   🔄 Intento {attempt}: {e.__class__.__name__}")
         except Exception as e:
-            logging.debug(f"   🔄 Intento {attempt}: {e.__class__.__name__}")
+            # Solo log cada 15 segundos para no saturar
+            current_time = time.time()
+            if current_time - last_log_time > 15:
+                elapsed = int(time.time() - start_time)
+                log.tor(f"Esperando TOR... ({elapsed}s/{timeout}s)")
+                last_log_time = current_time
 
-        # Esperar antes de reintentar
         time.sleep(3)
 
-    logging.error(f"   ❌ TOR no estableció circuito después de {timeout} segundos")
+    log.error(f"❌ TOR no estableció circuito después de {timeout} segundos")
     return False
 
 
 def new_chrome_driver(worker_id=None):
     """Driver que espera ACTIVAMENTE a que TOR esté listo."""
 
-    logging.info(f"\n{'=' * 60}")
-    logging.info(f"🚀 INICIANDO DRIVER PARA WORKER {worker_id}")
-    logging.info(f"{'=' * 60}")
+    # Mensaje minimalista en consola
+    if worker_id is not None:
+        log.progreso(f"Iniciando driver {worker_id}...")
+    else:
+        log.progreso("Iniciando driver...")
 
     # ========== PASO 1: ESPERAR A QUE TOR ESTÉ LISTO ==========
     if not wait_for_tor_circuit(timeout=120):
-        logging.error("❌ No se puede continuar sin TOR")
+        log.error("❌ No se puede continuar sin TOR")
         raise Exception("TOR no está funcionando después de 120 segundos")
 
     # ========== PASO 2: CONFIGURAR OPCIONES DE CHROME ==========
@@ -140,7 +144,7 @@ def new_chrome_driver(worker_id=None):
     ]
     selected_ua = random.choice(user_agents)
     options.add_argument(f"user-agent={selected_ua}")
-    logging.info(f"   📱 User-Agent: {selected_ua[:60]}...")
+    log.tor(f"User-Agent: {selected_ua[:60]}...")
 
     # 2.6 Tamaño y configuración de pantalla
     options.add_argument("--window-size=1920,1080")
@@ -162,13 +166,13 @@ def new_chrome_driver(worker_id=None):
     # ========== PASO 3: INICIAR DRIVER ==========
     try:
         # 3.1 Obtener ChromeDriver compatible
-        logging.info("   📥 Instalando/obteniendo ChromeDriver...")
+        log.tor("Obteniendo ChromeDriver...")
         chromedriver_path = ChromeDriverManager().install()
         service = ChromeService(executable_path=chromedriver_path)
 
         # 3.2 Crear driver
         driver = webdriver.Chrome(service=service, options=options)
-        logging.info("   ✅ Driver creado exitosamente")
+        log.tor("✅ Driver creado")
 
         # 3.3 Eliminar rastros de automation
         driver.execute_script("""
@@ -176,7 +180,6 @@ def new_chrome_driver(worker_id=None):
                 get: () => undefined
             });
 
-            // Sobrescribir chrome object
             window.chrome = {
                 runtime: {},
                 loadTimes: function() {},
@@ -191,44 +194,38 @@ def new_chrome_driver(worker_id=None):
         driver.implicitly_wait(15)
 
         # ========== PASO 4: VERIFICAR TOR EN EL NAVEGADOR ==========
-        logging.info("   🔍 Verificando TOR en el navegador...")
-
+        # Solo verificamos, pero sin saturar la consola
+        log.tor("Verificando TOR en navegador...")
         try:
-            # 4.1 Navegar a check.torproject.org
             driver.set_page_load_timeout(45)
             driver.get("https://check.torproject.org")
             time.sleep(5)
 
-            page_source = driver.page_source
-            if "Congratulations" in page_source:
-                logging.info("   🎉 NAVEGADOR CONFIRMADO usando TOR")
+            if "Congratulations" in driver.page_source:
+                log.tor("✅ Navegador usando TOR")
 
-                # 4.2 Obtener IP real del navegador
                 driver.get("https://api.ipify.org")
                 time.sleep(3)
                 browser_ip = driver.find_element(By.TAG_NAME, "body").text.strip()
-                logging.info(f"   🌐 IP del navegador: {browser_ip}")
-
-                # 4.3 Volver a página principal
-                driver.get("https://consultaprocesos.ramajudicial.gov.co")
-                time.sleep(3)
+                log.tor(f"IP navegador: {browser_ip}")
             else:
-                logging.warning("   ⚠️ Navegador NO está usando TOR")
+                log.tor("⚠️ Navegador NO está usando TOR")
 
         except Exception as e:
-            logging.warning(f"   ⚠️ Error verificando TOR en navegador: {e}")
-            # Intentar navegar directamente al sitio
-            try:
-                driver.get("https://consultaprocesos.ramajudicial.gov.co")
-                time.sleep(3)
-            except:
-                pass
+            log.tor(f"Error verificando TOR: {e}")
 
-        logging.info(f"✅ Driver {worker_id} listo para usar")
+        # Siempre navegar al sitio objetivo
+        try:
+            driver.get("https://consultaprocesos.ramajudicial.gov.co")
+            time.sleep(3)
+        except:
+            pass
+
+        log.exito("Driver listo")
         return driver
 
     except Exception as e:
-        logging.error(f"❌ Error creando driver: {e}")
+        log.error(f"Error creando driver: {e}")
         raise
 
 
@@ -249,12 +246,12 @@ def is_page_maintenance(driver):
 
         for keyword in maintenance_keywords:
             if keyword in body_text:
-                logging.warning(f"⚠️ Página en mantenimiento: {keyword}")
+                log.advertencia(f"Página en mantenimiento: {keyword}")
                 return True
 
         return False
     except Exception as e:
-        logging.debug(f"Error verificando mantenimiento: {e}")
+        log.debug(f"Error verificando mantenimiento: {e}")
         return False
 
 
@@ -264,19 +261,18 @@ def test_javascript(driver):
         result = driver.execute_script("""
             return {
                 hasDocument: typeof document !== 'undefined',
-                hasWindow: typeof window !== 'undefined',
-                userAgent: navigator.userAgent
+                hasWindow: typeof window !== 'undefined'
             }
         """)
 
         if result.get('hasDocument') and result.get('hasWindow'):
-            logging.info("✅ JavaScript funcionando correctamente")
+            log.debug("JavaScript OK")
             return True
         else:
-            logging.warning("⚠️ JavaScript podría no estar funcionando")
+            log.advertencia("JavaScript podría no estar funcionando")
             return False
     except Exception as e:
-        logging.error(f"❌ Error en test JavaScript: {e}")
+        log.error(f"Error en test JavaScript: {e}")
         return False
 
 
@@ -287,44 +283,40 @@ def check_tor_connection(driver):
         time.sleep(3)
 
         if "Congratulations" in driver.page_source:
-            logging.info("✅ Navegando a través de TOR confirmado")
+            log.tor("✅ Navegador usando TOR")
             return True
         else:
-            logging.warning("⚠️ No se detecta TOR activo")
+            log.tor("⚠️ No se detecta TOR")
             return False
     except Exception as e:
-        logging.error(f"Error verificando TOR: {e}")
+        log.tor(f"Error verificando TOR: {e}")
         return False
 
 
 def handle_modal_error(driver, numero):
     """Maneja el modal de error de red."""
     try:
-        # Buscar modal activo
         modal = driver.find_element(By.XPATH,
                                     "//div[contains(@class, 'v-dialog--active')]"
                                     )
 
-        logging.warning(f"⚠️ Modal de error detectado para {numero}")
+        log.advertencia(f"Modal de error detectado para {numero}")
 
-        # Buscar botón Volver
         volver_btn = modal.find_element(By.XPATH,
                                         ".//button[contains(text(), 'Volver')]"
                                         )
 
-        # Hacer click
         driver.execute_script("arguments[0].click();", volver_btn)
-        logging.info(f"   ✅ Click en Volver ejecutado")
+        log.accion("Cerrando modal...")
         time.sleep(3)
 
-        # Esperar a que TOR se recupere
         if wait_for_tor_circuit(timeout=60):
-            logging.info(f"   ✅ TOR recuperado")
+            log.tor("TOR recuperado")
             return True
         else:
-            logging.error(f"   ❌ TOR no se recuperó")
+            log.error("TOR no se recuperó")
             return False
 
     except Exception as e:
-        logging.debug(f"No hay modal de error o no se pudo manejar: {e}")
+        log.debug(f"No hay modal de error: {e}")
         return False

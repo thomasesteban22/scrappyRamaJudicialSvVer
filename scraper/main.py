@@ -1,11 +1,11 @@
+# scraper/main.py
 import os
 import csv
 import smtplib
 import time
 import threading
-import logging
-import requests
 import itertools
+import sys
 from queue import Queue
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -13,14 +13,36 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
+# Importar nuestro logger primero
+from .logger import log
+
+# Configuración de directorios debug (igual que antes)
 DEBUG_DIR = os.path.join(os.getcwd(), "debug")
 SCREENSHOT_DIR = os.path.join(DEBUG_DIR, "screenshots")
 HTML_DIR = os.path.join(DEBUG_DIR, "html")
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 os.makedirs(HTML_DIR, exist_ok=True)
 
+# --- IMPORTS DE TU PROYECTO ---
+from .config import (
+    OUTPUT_DIR,
+    NUM_THREADS,
+    PDF_PATH,
+    EMAIL_USER,
+    EMAIL_PASS,
+    SCHEDULE_TIME,
+    ENV,
+    DEBUG_SCRAPER
+)
+from .loader import cargar_procesos
+from .browser import new_chrome_driver
+from .worker import worker_task
+import scraper.worker as worker
+from .reporter import generar_pdf
 
-# Añade al inicio del main()
+
+# ---------------- FUNCIONES ---------------- #
+
 def setup_environment():
     """Configura entorno para evitar detección"""
     # Limpiar variables de entorno de Selenium
@@ -31,12 +53,13 @@ def setup_environment():
     display = os.environ.get('DISPLAY', ':99')
     os.environ['DISPLAY'] = display
 
-    # Log de entorno
-    logging.info(f"DISPLAY configurado: {display}")
-    logging.info(f"Entorno Python: {sys.version}")
+    # Log de entorno (solo a archivo)
+    log.debug(f"DISPLAY configurado: {display}")
+    log.debug(f"Entorno Python: {sys.version}")
+
 
 def save_debug_page(driver, step_name="step", numero="unknown"):
-    """Guarda screenshot y HTML para inspección."""
+    """Guarda screenshot y HTML para inspección (solo logs a archivo)."""
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     ss_path = os.path.join(SCREENSHOT_DIR, f"{numero}_{step_name}_{timestamp}.png")
@@ -45,42 +68,22 @@ def save_debug_page(driver, step_name="step", numero="unknown"):
         driver.save_screenshot(ss_path)
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(driver.page_source)
-        logging.info(f"[DEBUG] Captura guardada: {ss_path}, HTML guardado: {html_path}")
+        log.debug(f"Captura guardada: {step_name} para {numero}")
     except Exception as e:
-        logging.error(f"[DEBUG] Error guardando debug: {e}")
+        log.error(f"Error guardando debug: {e}")
+
 
 def probar_un_proceso(numero):
     """
     Ejecuta worker_task completo para UN solo proceso.
     Usar en VPS para debug sin scheduler ni threads.
-    Captura screenshots y HTML para cada paso importante.
     """
-    import itertools, threading, logging
+    import itertools, threading
     from .browser import new_chrome_driver
     from .worker import worker_task
     import scraper.worker as worker
-    import os
-    from datetime import datetime
 
-    # Carpetas debug
-    DEBUG_DIR = os.path.join(os.getcwd(), "debug")
-    SCREENSHOT_DIR = os.path.join(DEBUG_DIR, "screenshots")
-    HTML_DIR = os.path.join(DEBUG_DIR, "html")
-    os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-    os.makedirs(HTML_DIR, exist_ok=True)
-
-    def save_debug_page(driver, step_name="step", numero="unknown"):
-        """Guarda screenshot y HTML para inspección."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        ss_path = os.path.join(SCREENSHOT_DIR, f"{numero}_{step_name}_{timestamp}.png")
-        html_path = os.path.join(HTML_DIR, f"{numero}_{step_name}_{timestamp}.html")
-        try:
-            driver.save_screenshot(ss_path)
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(driver.page_source)
-            logging.info(f"[DEBUG] Captura guardada: {ss_path}, HTML guardado: {html_path}")
-        except Exception as e:
-            logging.error(f"[DEBUG] Error guardando debug: {e}")
+    log.titulo(f"MODO PRUEBA - Proceso {numero}")
 
     # Inicialización de listas y lock
     results, actes, errors = [], [], []
@@ -90,11 +93,11 @@ def probar_un_proceso(numero):
     worker.process_counter = itertools.count(1)
     worker.TOTAL_PROCESSES = 1
 
-    # Crear driver headless
+    # Crear driver
     driver = new_chrome_driver(0)
 
     try:
-        logging.info(f"🧪 Probando proceso {numero}")
+        log.progreso(f"Probando proceso {numero}")
 
         # Captura inicial
         save_debug_page(driver, "inicio", numero)
@@ -105,50 +108,26 @@ def probar_un_proceso(numero):
         # Captura final
         save_debug_page(driver, "fin_task", numero)
 
-        logging.info(f"✅ Prueba finalizada")
-        logging.info(f"Actuaciones encontradas: {len(actes)}")
-        logging.info(f"Errores: {len(errors)}")
+        log.titulo("RESULTADOS DE LA PRUEBA")
+        log.resultado(f"Actuaciones encontradas: {len(actes)}")
+        log.resultado(f"Errores: {len(errors)}")
+
+        if actes:
+            log.progreso("Primeras 5 actuaciones:")
+            for i, act in enumerate(actes[:5], 1):
+                log.proceso(f"  {i}. {act[1]} - {act[2][:80]}...")
 
     except Exception as e:
-        # Captura de error
         save_debug_page(driver, "error", numero)
-        logging.error(f"❌ Error en prueba: {e}")
+        log.error(f"Error en prueba: {e}")
 
     finally:
         driver.quit()
-        logging.info("Driver cerrado")
+        log.exito("Driver cerrado")
 
-# 1) Silencia TensorFlow y Chrome/DevTools
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['WEBVIEW_LOG_LEVEL'] = '3'
-
-# 2) Config global de logging: sólo INFO y superiores
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s'
-)
-# Silencia logs muy ruidosos
-for noisy in ('selenium', 'urllib3', 'absl', 'google_apis'):
-    logging.getLogger(noisy).setLevel(logging.WARNING)
-
-# --- IMPORTS DE TU PROYECTO ---
-from .config import (
-    OUTPUT_DIR,
-    NUM_THREADS,
-    PDF_PATH,
-    EMAIL_USER,
-    EMAIL_PASS,
-    SCHEDULE_TIME  # ej. "01:00"
-)
-from .loader import cargar_procesos
-from .browser import new_chrome_driver
-from .worker import worker_task
-import scraper.worker as worker
-from .reporter import generar_pdf
-
-# ---------------- FUNCIONES ---------------- #
 
 def exportar_csv(actes, start_ts):
+    """Exporta las actuaciones a CSV."""
     fecha_registro = date.fromtimestamp(start_ts).isoformat()
     csv_path = os.path.join(OUTPUT_DIR, "actuaciones.csv")
     headers = [
@@ -173,39 +152,49 @@ def exportar_csv(actes, start_ts):
                 actu,
                 anota
             ])
-    logging.info(f"CSV generado: {csv_path}")
+    log.resultado(f"CSV generado: {csv_path}")
 
 
 def send_report_email():
+    """Envía el reporte por correo."""
     now = datetime.now()
     fecha_str = now.strftime("%A %d-%m-%Y a las %I:%M %p").capitalize()
-    smtp = smtplib.SMTP_SSL("smtp.gmail.com", 465)
-    smtp.login(EMAIL_USER, EMAIL_PASS)
 
-    msg = MIMEMultipart()
-    msg["Subject"] = "Reporte Diario de Actuaciones"
-    msg["From"] = EMAIL_USER
-    msg["To"] = EMAIL_USER
+    try:
+        smtp = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        smtp.login(EMAIL_USER, EMAIL_PASS)
 
-    cuerpo = f"Adjunto encontrarás el reporte de actuaciones generado el {fecha_str}."
-    msg.attach(MIMEText(cuerpo, "plain"))
+        msg = MIMEMultipart()
+        msg["Subject"] = f"Reporte Diario de Actuaciones - {fecha_str}"
+        msg["From"] = EMAIL_USER
+        msg["To"] = EMAIL_USER
 
-    with open(PDF_PATH, "rb") as f:
-        part = MIMEApplication(f.read(), Name=os.path.basename(PDF_PATH))
-        part.add_header(
-            'Content-Disposition',
-            'attachment',
-            filename=os.path.basename(PDF_PATH)
-        )
-        msg.attach(part)
+        cuerpo = f"Adjunto encontrarás el reporte de actuaciones generado el {fecha_str}."
+        msg.attach(MIMEText(cuerpo, "plain"))
 
-    smtp.sendmail(EMAIL_USER, [EMAIL_USER], msg.as_string())
-    smtp.quit()
-    logging.info("Correo enviado exitosamente.")
+        if os.path.exists(PDF_PATH):
+            with open(PDF_PATH, "rb") as f:
+                part = MIMEApplication(f.read(), Name=os.path.basename(PDF_PATH))
+                part.add_header('Content-Disposition', 'attachment', filename=os.path.basename(PDF_PATH))
+                msg.attach(part)
+
+        smtp.sendmail(EMAIL_USER, [EMAIL_USER], msg.as_string())
+        smtp.quit()
+        log.exito("Correo enviado")
+
+    except Exception as e:
+        log.error(f"Error enviando correo: {e}")
 
 
 def ejecutar_ciclo():
     """Ejecuta un ciclo completo de scraping, reporte, CSV y correo."""
+
+    log.titulo("INICIANDO CICLO DE SCRAPING")
+    log.resultado(f"📅 Fecha: {datetime.now().strftime('%d/%m/%Y')}")
+    log.resultado(f"🎯 Período: últimos {DIAS_BUSQUEDA} días")
+    log.resultado(f"🔄 Hilos: {NUM_THREADS}")
+    log.separador()
+
     # Reiniciar contador de procesos
     worker.process_counter = itertools.count(1)
 
@@ -223,11 +212,10 @@ def ejecutar_ciclo():
     TOTAL = len(procesos)
     worker.TOTAL_PROCESSES = TOTAL
 
-    logging.info(f"Total de procesos a escanear: {TOTAL}")
-    logging.info(">>> INICIO DE CICLO <<<")
+    log.progreso(f"Procesos a escanear: {TOTAL}")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Prep cola y threads
+    # Preparar cola y threads
     q = Queue()
     for num in procesos:
         q.put(num)
@@ -250,10 +238,10 @@ def ejecutar_ciclo():
                     worker_task(numero, driver, results, actes, errors, lock)
                     break
                 except Exception as exc:
-                    logging.warning(f"{numero}: intento {intento + 1}/10 fallido ({exc})")
+                    log.advertencia(f"{numero}: intento {intento + 1}/10 fallido")
                     if intento == 9:
                         with lock:
-                            errors.append((numero, str(exc)))
+                            errors.append((numero, str(exc)[:200]))
         driver.quit()
 
     for drv in drivers:
@@ -268,107 +256,91 @@ def ejecutar_ciclo():
     # Reportes y envío
     generar_pdf(TOTAL, actes, errors, start_ts, time.time())
     exportar_csv(actes, start_ts)
-    try:
-        send_report_email()
-    except Exception as e:
-        logging.error(f"Error enviando correo: {e}")
+
+    if ENV == 'production':
+        try:
+            send_report_email()
+        except Exception as e:
+            log.error(f"Error enviando correo: {e}")
 
     # Resumen
     err = len(errors)
     esc = TOTAL - err
-    logging.info(f"=== RESUMEN CICLO === Total: {TOTAL} | Escaneados: {esc} | Errores: {err}")
-    if err:
-        logging.error("Procesos con error:")
-        for num, msg in errors:
-            logging.error(f"  • {num}: {msg}")
-    logging.info(">>> FIN DE CICLO <<<\n")
+
+    log.titulo("RESUMEN DEL CICLO")
+    log.resultado(f"✅ Escaneados: {esc}")
+    log.resultado(f"❌ Errores: {err}")
+    log.resultado(f"📋 Actuaciones: {len(actes)}")
+
+    if err and DEBUG_SCRAPER:
+        log.advertencia("Procesos con error:")
+        for num, msg in errors[:5]:  # Solo primeros 5 en consola
+            log.advertencia(f"  • {num}: {msg[:100]}")
+
+    log.separador()
 
 
 def log_ip_salida():
+    """Obtiene y loguea la IP de salida."""
     try:
         ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
-        logging.info(f"IP SALIENTE DEL CONTENEDOR: {ip}")
+        log.info(f"IP Saliente: {ip}")
     except Exception as e:
-        logging.error(f"No se pudo obtener IP de salida: {e}")
+        log.debug(f"No se pudo obtener IP de salida: {e}")
 
 
 # ---------------- MAIN ---------------- #
+
 def main():
-    logging.info("Iniciando scraper...")
-    try:
-        from .diagnostic import full_diagnostic
-        full_diagnostic()
+    """Punto de entrada principal."""
 
-        # Preguntar si continuar
-        logging.info("\n¿Continuar con el scraping? (esperando 10 segundos...)")
-        time.sleep(10)
+    log.titulo("SCRAPER RAMA JUDICIAL")
+    log.resultado(f"🌍 Entorno: {ENV}")
+    log.resultado(f"🔧 Debug: {'ACTIVADO' if DEBUG_SCRAPER else 'DESACTIVADO'}")
+    log.resultado(f"📅 Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    log.separador()
 
-    except ImportError:
-        logging.warning("No se pudo ejecutar diagnóstico completo")
-
-    # Verificar TOR
-    from .tor_check import check_tor, test_site_with_tor
-    try:
-        from .verify_tor import verify_tor_setup
-        if not verify_tor_setup():
-            logging.error("❌ TOR no configurado correctamente. El scraping podría fallar.")
-            # Preguntar si continuar
-            logging.info("Continuando de todos modos...")
-    except ImportError:
-        logging.warning("No se pudo importar verify_tor, continuando...")
+    # Configurar entorno
+    setup_environment()
 
     # Log de IP de salida
     log_ip_salida()
 
-    probar_un_proceso("08296408900120190029100")
+    if DEBUG_SCRAPER:
+        # Modo prueba: un solo proceso
+        probar_un_proceso("08296408900120190029100")
 
-    bogota_tz = ZoneInfo("America/Bogota")
-    hh, mm = map(int, SCHEDULE_TIME.split(":"))
+    else:
+        # Modo producción - scheduler
+        log.progreso(f"Scheduler iniciado. Próxima ejecución: {SCHEDULE_TIME}")
 
-    # --- PRUEBA RÁPIDA DE UN PROCESO REAL (Selenium) ---
-    numero_prueba = "08296408900120190029100"  # Cambia por cualquier radicación real
-    logging.info(f"Probando scraping de proceso: {numero_prueba}")
+        bogota_tz = ZoneInfo("America/Bogota")
+        hh, mm = map(int, SCHEDULE_TIME.split(":"))
 
-    driver = new_chrome_driver(0)
-    results, actes, errors = [], [], []
-    lock = threading.Lock()
+        while True:
+            now = datetime.now(bogota_tz)
+            target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if now >= target:
+                target += timedelta(days=1)
+            wait_sec = (target - now).total_seconds()
 
-    try:
-        worker_task(numero_prueba, driver, results, actes, errors, lock)
-        if actes:
-            logging.info(f"✅ Datos obtenidos para {numero_prueba}: {actes}")
-        else:
-            logging.warning(f"❌ No se encontraron actuaciones para {numero_prueba}")
-    except Exception as e:
-        logging.error(f"Error ejecutando worker_task: {e}")
-    finally:
-        driver.quit()
-    # --- FIN PRUEBA ---
+            # Conteo regresivo con avisos cada hora
+            remaining = wait_sec
+            while remaining > 0:
+                if remaining > 3600:
+                    hrs = int(remaining // 3600)
+                    log.progreso(f"Faltan {hrs} hora(s) para próxima ejecución")
+                    time.sleep(3600)
+                    remaining -= 3600
+                else:
+                    mins = int(remaining // 60)
+                    secs = int(remaining % 60)
+                    if mins > 0 or secs > 0:
+                        log.progreso(f"Faltan {mins} min {secs} seg")
+                    time.sleep(remaining)
+                    remaining = 0
 
-    # Scheduler diario
-    while True:
-        now = datetime.now(bogota_tz)
-        target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        wait_sec = (target - now).total_seconds()
-
-        # Conteo regresivo con avisos cada hora (y último aviso minutos/segundos)
-        remaining = wait_sec
-        while remaining > 0:
-            if remaining > 3600:
-                hrs = int(remaining // 3600)
-                logging.info(f"Faltan {hrs} hora(s) para la próxima ejecución.")
-                time.sleep(3600)
-                remaining -= 3600
-            else:
-                mins = int(remaining // 60)
-                secs = int(remaining % 60)
-                logging.info(f"Faltan {mins} minuto(s) y {secs} segundo(s) para la ejecución.")
-                time.sleep(remaining)
-                remaining = 0
-
-        ejecutar_ciclo()
+            ejecutar_ciclo()
 
 
 if __name__ == "__main__":
