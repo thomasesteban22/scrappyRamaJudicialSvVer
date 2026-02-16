@@ -32,7 +32,8 @@ from .config import (
     EMAIL_PASS,
     SCHEDULE_TIME,
     ENV,
-    DEBUG_SCRAPER
+    DEBUG_SCRAPER,
+    DIAS_BUSQUEDA
 )
 from .loader import cargar_procesos
 from .browser import new_chrome_driver
