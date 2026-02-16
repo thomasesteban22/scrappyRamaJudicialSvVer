@@ -77,20 +77,27 @@ def save_debug_page(driver, step_name="step", numero="unknown"):
 def probar_un_proceso(numero):
     """
     Ejecuta worker_task completo para UN solo proceso.
-    Usar en VPS para debug sin scheduler ni threads.
+    PRIMERO espera TOR, LUEGO inicia el driver.
     """
     import itertools, threading
-    from .browser import new_chrome_driver
+    from .browser import new_chrome_driver, wait_for_tor_circuit
     from .worker import worker_task
     import scraper.worker as worker
 
     log.titulo(f"MODO PRUEBA - Proceso {numero}")
 
-    # Inicialización de listas y lock
+    # ========== PASO 1: ESPERAR A QUE TOR ESTÉ LISTO ==========
+    log.progreso("Verificando TOR...")
+    if not wait_for_tor_circuit(timeout=180):
+        log.error("❌ TOR no está listo después de 180 segundos. Abortando prueba.")
+        return
+
+    # ========== PASO 2: TOR LISTO, INICIAR DRIVER ==========
+    log.exito("TOR listo. Iniciando driver...")
+
+    # Inicialización
     results, actes, errors = [], [], []
     lock = threading.Lock()
-
-    # Reiniciar contadores del worker
     worker.process_counter = itertools.count(1)
     worker.TOTAL_PROCESSES = 1
 
@@ -98,30 +105,18 @@ def probar_un_proceso(numero):
     driver = new_chrome_driver(0)
 
     try:
-        log.progreso(f"Probando proceso {numero}")
-
-        # Captura inicial
+        log.progreso(f"Ejecutando prueba...")
         save_debug_page(driver, "inicio", numero)
-
-        # Ejecutar worker_task
         worker_task(numero, driver, results, actes, errors, lock)
-
-        # Captura final
         save_debug_page(driver, "fin_task", numero)
 
-        log.titulo("RESULTADOS DE LA PRUEBA")
-        log.resultado(f"Actuaciones encontradas: {len(actes)}")
+        log.titulo("RESULTADOS")
+        log.resultado(f"Actuaciones: {len(actes)}")
         log.resultado(f"Errores: {len(errors)}")
-
-        if actes:
-            log.progreso("Primeras 5 actuaciones:")
-            for i, act in enumerate(actes[:5], 1):
-                log.proceso(f"  {i}. {act[1]} - {act[2][:80]}...")
 
     except Exception as e:
         save_debug_page(driver, "error", numero)
-        log.error(f"Error en prueba: {e}")
-
+        log.error(f"Error: {e}")
     finally:
         driver.quit()
         log.exito("Driver cerrado")
