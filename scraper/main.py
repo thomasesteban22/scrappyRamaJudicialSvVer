@@ -74,17 +74,17 @@ def save_debug_page(driver, step_name="step", numero="unknown"):
         log.error(f"Error guardando debug: {e}")
 
 
-def probar_un_proceso(numero):
+def probar_procesos(lista_procesos):
     """
-    Ejecuta worker_task completo para UN solo proceso.
-    PRIMERO espera TOR, LUEGO inicia el driver.
+    Ejecuta worker_task para una lista de procesos.
+    Útil para modo DEBUG con múltiples procesos.
     """
     import itertools, threading
     from .browser import new_chrome_driver, wait_for_tor_circuit
     from .worker import worker_task
     import scraper.worker as worker
 
-    log.titulo(f"MODO PRUEBA - Proceso {numero}")
+    log.titulo(f"MODO PRUEBA - {len(lista_procesos)} PROCESOS")
 
     # ========== PASO 1: ESPERAR A QUE TOR ESTÉ LISTO ==========
     log.progreso("Verificando TOR...")
@@ -99,24 +99,47 @@ def probar_un_proceso(numero):
     results, actes, errors = [], [], []
     lock = threading.Lock()
     worker.process_counter = itertools.count(1)
-    worker.TOTAL_PROCESSES = 1
+    worker.TOTAL_PROCESSES = len(lista_procesos)
 
     # Crear driver
     driver = new_chrome_driver(0)
 
     try:
-        log.progreso(f"Ejecutando prueba...")
-        save_debug_page(driver, "inicio", numero)
-        worker_task(numero, driver, results, actes, errors, lock)
-        save_debug_page(driver, "fin_task", numero)
+        log.progreso(f"Ejecutando {len(lista_procesos)} procesos...")
 
-        log.titulo("RESULTADOS")
-        log.resultado(f"Actuaciones: {len(actes)}")
+        for i, numero in enumerate(lista_procesos, 1):
+            log.separador()
+            log.progreso(f"[{i}/{len(lista_procesos)}] {numero}")
+
+            try:
+                save_debug_page(driver, f"inicio_{i}", numero)
+                worker_task(numero, driver, results, actes, errors, lock)
+                save_debug_page(driver, f"fin_{i}", numero)
+                log.exito(f"Proceso {i} completado")
+            except Exception as e:
+                log.error(f"Error en proceso {i}: {e}")
+                save_debug_page(driver, f"error_{i}", numero)
+
+            # Pequeña pausa entre procesos
+            time.sleep(2)
+
+        log.titulo("RESULTADOS FINALES")
+        log.resultado(f"Total procesos: {len(lista_procesos)}")
+        log.resultado(f"Actuaciones encontradas: {len(actes)}")
         log.resultado(f"Errores: {len(errors)}")
 
+        if actes:
+            log.progreso("Primeras 10 actuaciones:")
+            for i, act in enumerate(actes[:10], 1):
+                log.proceso(f"  {i}. {act[1]} - {act[2][:80]}...")
+
+        if errors:
+            log.advertencia("Procesos con error:")
+            for num, msg in errors:
+                log.advertencia(f"  • {num}: {msg[:100]}")
+
     except Exception as e:
-        save_debug_page(driver, "error", numero)
-        log.error(f"Error: {e}")
+        log.error(f"Error general en prueba: {e}")
     finally:
         driver.quit()
         log.exito("Driver cerrado")
@@ -303,8 +326,15 @@ def main():
     log_ip_salida()
 
     if DEBUG_SCRAPER:
-        # Modo prueba: un solo proceso
-        probar_un_proceso("08296408900120190029100")
+        # Modo prueba: lista de procesos
+        procesos_prueba = [
+            "08296408900120190029100",
+            "11001310300120080020700",
+            "11001310300120080023700",
+            "11001310300120130071600",
+            "11001310300120150030300"
+        ]
+        probar_procesos(procesos_prueba)
 
     else:
         # Modo producción - scheduler
