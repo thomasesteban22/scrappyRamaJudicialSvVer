@@ -4,7 +4,6 @@ import os
 import sys
 import csv
 from datetime import datetime
-from .config import ENV, DEBUG_SCRAPER, VERBOSITY_LEVEL, VERBOSITY
 
 
 # Colores ANSI para consola
@@ -68,8 +67,6 @@ class ScraperLogger:
             f.write(f"{'=' * 80}\n")
             f.write(f" SCRAPER RAMA JUDICIAL - EJECUCIÓN {self.execution_id}\n")
             f.write(f" Fecha: {self.execution_date}\n")
-            f.write(f" Entorno: {ENV}\n")
-            f.write(f" Debug: {'ACTIVADO' if DEBUG_SCRAPER else 'DESACTIVADO'}\n")
             f.write(f"{'=' * 80}\n\n")
 
     # ========== MÉTODOS PRINCIPALES ==========
@@ -88,28 +85,23 @@ class ScraperLogger:
 
     def progreso(self, mensaje):
         """🔄 PROGRESO - Avance del scraper."""
-        if VERBOSITY_LEVEL >= VERBOSITY['NORMAL']:
-            self.logger.info(f"{Colors.CYAN}🔄 {mensaje}{Colors.END}")
+        self.logger.info(f"{Colors.CYAN}🔄 {mensaje}{Colors.END}")
 
     def proceso(self, mensaje):
         """📋 PROCESO - Detalles del proceso actual."""
-        if VERBOSITY_LEVEL >= VERBOSITY['NORMAL']:
-            self.logger.info(f"{Colors.WHITE}📋 {mensaje}{Colors.END}")
+        self.logger.info(f"{Colors.WHITE}📋 {mensaje}{Colors.END}")
 
     def accion(self, mensaje):
         """🖱️ ACCIÓN - Clicks, navegación, etc."""
-        if VERBOSITY_LEVEL >= VERBOSITY['NORMAL']:
-            self.logger.info(f"{Colors.BLUE}🖱️ {mensaje}{Colors.END}")
+        self.logger.info(f"{Colors.BLUE}🖱️ {mensaje}{Colors.END}")
 
     def exito(self, mensaje):
         """✅ ÉXITO - Operaciones exitosas."""
-        if VERBOSITY_LEVEL >= VERBOSITY['MINIMAL']:
-            self.logger.info(f"{Colors.GREEN}✅ {mensaje}{Colors.END}")
+        self.logger.info(f"{Colors.GREEN}✅ {mensaje}{Colors.END}")
 
     def advertencia(self, mensaje):
         """⚠️ ADVERTENCIA - Problemas no críticos."""
-        if VERBOSITY_LEVEL >= VERBOSITY['NORMAL']:
-            self.logger.warning(f"{Colors.YELLOW}⚠️ {mensaje}{Colors.END}")
+        self.logger.warning(f"{Colors.YELLOW}⚠️ {mensaje}{Colors.END}")
 
     def error(self, mensaje):
         """❌ ERROR - Problemas críticos (siempre se muestra)."""
@@ -124,8 +116,7 @@ class ScraperLogger:
 
     def separador(self):
         """Línea separadora."""
-        if VERBOSITY_LEVEL >= VERBOSITY['NORMAL']:
-            self.logger.info(f"{Colors.GRAY}{'=' * 50}{Colors.END}")
+        self.logger.info(f"{Colors.GRAY}{'=' * 50}{Colors.END}")
 
     # ========== MÉTODOS PARA ARCHIVO (NO SALEN EN CONSOLA) ==========
 
@@ -180,8 +171,7 @@ class ScraperLogger:
             f.write(f"RESUMEN DE EJECUCIÓN - {self.execution_id}\n")
             f.write(f"{'=' * 60}\n\n")
             f.write(f"Fecha: {self.execution_date}\n")
-            f.write(f"Entorno: {ENV}\n")
-            f.write(f"Debug: {DEBUG_SCRAPER}\n\n")
+            f.write(f"Debug: {'ACTIVADO' if os.getenv('DEBUG_SCRAPER', '0') == '1' else 'DESACTIVADO'}\n\n")
             f.write(f"📊 ESTADÍSTICAS:\n")
             f.write(f"  • Total procesos: {total_procesos}\n")
             f.write(f"  • Exitosos: {exitosos}\n")
