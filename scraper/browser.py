@@ -13,21 +13,20 @@ from .config import ENV
 from .logger import log
 
 # ========== SILENCIAR LOGS EXTERNOS ==========
-# Ya están silenciados en logger.py, pero por si acaso:
 os.environ['WDM_LOG_LEVEL'] = '0'
 os.environ['WDM_PRINT_FIRST_LINE'] = 'False'
 os.environ['TOR_LOG'] = 'notice stderr'
 
 
-def wait_for_tor_circuit(timeout=120):
+def wait_for_tor_circuit(timeout=180):
     """
     Espera ACTIVAMENTE hasta que TOR tenga un circuito de salida funcionando.
-    AHORA: Solo muestra logs en consola si son importantes.
-    Todos los logs detallados van al archivo.
+    Esta función SOLO debe llamarse UNA VEZ al inicio del programa.
     """
     start_time = time.time()
 
-    # Mensaje inicial (solo una vez, va al archivo)
+    # Mensaje en consola para que el usuario sepa que está pasando
+    log.info("Verificando conexión TOR (puede tardar hasta 3 minutos)...")
     log.tor("Verificando circuito TOR...")
 
     # 1. Obtener IP directa (sin proxy)
@@ -41,11 +40,9 @@ def wait_for_tor_circuit(timeout=120):
         log.tor(f"No se pudo obtener IP directa: {e}")
 
     # 2. Intentar con TOR hasta que funcione
-    attempt = 0
     last_log_time = 0
 
     while time.time() - start_time < timeout:
-        attempt += 1
         try:
             session = requests.Session()
             session.proxies = {
@@ -54,63 +51,57 @@ def wait_for_tor_circuit(timeout=120):
             }
             session.timeout = 15
 
-            # Obtener IP por TOR
             response = session.get('https://api.ipify.org', timeout=15)
 
             if response.status_code == 200:
                 tor_ip = response.text.strip()
 
-                # Verificar que NO es la misma IP directa
                 if direct_ip and tor_ip != direct_ip:
                     elapsed = int(time.time() - start_time)
                     log.tor(f"✅ TOR LISTO! IP: {tor_ip} (en {elapsed}s)")
-                    # Mensaje corto en consola
-                    log.info(f"TOR listo ({elapsed}s)")
+                    log.exito(f"Conexión TOR establecida ({elapsed} segundos)")
                     return True
                 elif not direct_ip:
                     log.tor(f"✅ TOR responde con IP: {tor_ip}")
-                    log.info("TOR listo")
+                    log.exito("Conexión TOR establecida")
                     return True
                 else:
                     log.tor(f"⚠️ TOR tiene misma IP que directa ({tor_ip})")
 
         except Exception as e:
-            # Solo log cada 15 segundos para no saturar
             current_time = time.time()
-            if current_time - last_log_time > 15:
+            if current_time - last_log_time > 30:
                 elapsed = int(time.time() - start_time)
-                log.tor(f"Esperando TOR... ({elapsed}s/{timeout}s)")
+                log.progreso(f"Esperando TOR... {elapsed}s/{timeout}s")
                 last_log_time = current_time
 
-        time.sleep(3)
+        time.sleep(5)
 
     log.error(f"❌ TOR no estableció circuito después de {timeout} segundos")
     return False
 
 
 def new_chrome_driver(worker_id=None):
-    """Driver que espera ACTIVAMENTE a que TOR esté listo."""
+    """
+    Crea un driver de Chrome configurado para usar TOR.
+    NOTA: Esta función ASUME que TOR ya está funcionando.
+    NO verifica TOR nuevamente.
+    """
 
-    # Mensaje minimalista en consola
     if worker_id is not None:
         log.progreso(f"Iniciando driver {worker_id}...")
     else:
         log.progreso("Iniciando driver...")
 
-    # ========== PASO 1: ESPERAR A QUE TOR ESTÉ LISTO ==========
-    if not wait_for_tor_circuit(timeout=120):
-        log.error("❌ No se puede continuar sin TOR")
-        raise Exception("TOR no está funcionando después de 120 segundos")
-
-    # ========== PASO 2: CONFIGURAR OPCIONES DE CHROME ==========
+    # ========== CONFIGURAR OPCIONES DE CHROME ==========
     options = Options()
 
-    # 2.1 Anti-detección
+    # Anti-detección
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
     options.add_experimental_option('useAutomationExtension', False)
 
-    # 2.2 Preferencias para evitar detección
+    # Preferencias para evitar detección
     prefs = {
         "credentials_enable_service": False,
         "profile.password_manager_enabled": False,
@@ -122,20 +113,19 @@ def new_chrome_driver(worker_id=None):
     }
     options.add_experimental_option("prefs", prefs)
 
-    # 2.3 Configuración para VPS/Docker
+    # Configuración para VPS/Docker
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
     options.add_argument("--disable-extensions")
 
-    # 2.4 Headless para producción
+    # Headless para producción
     if ENV.upper() == "PRODUCTION":
         options.add_argument("--headless=new")
         options.add_argument("--remote-debugging-port=9222")
-        options.add_argument("--remote-debugging-address=0.0.0.0")
 
-    # 2.5 User-Agent realista
+    # User-Agent realista
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -146,40 +136,36 @@ def new_chrome_driver(worker_id=None):
     options.add_argument(f"user-agent={selected_ua}")
     log.tor(f"User-Agent: {selected_ua[:60]}...")
 
-    # 2.6 Tamaño y configuración de pantalla
+    # Tamaño y configuración de pantalla
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--start-maximized")
     options.add_argument("--lang=es-ES")
     options.add_argument("--accept-lang=es-ES,es;q=0.9")
 
-    # 2.7 Configurar proxy TOR
+    # Configurar proxy TOR (ASUMIMOS que ya está funcionando)
     options.add_argument('--proxy-server=socks5://127.0.0.1:9050')
     options.add_argument('--ignore-certificate-errors')
     options.add_argument('--ignore-ssl-errors')
     options.add_argument('--disable-web-security')
     options.add_argument('--allow-running-insecure-content')
-    options.add_argument('--disable-features=IsolateOrigins,site-per-process')
 
-    # 2.8 Timeouts en página
+    # Timeouts en página
     options.page_load_strategy = "eager"
 
-    # ========== PASO 3: INICIAR DRIVER ==========
+    # ========== INICIAR DRIVER ==========
     try:
-        # 3.1 Obtener ChromeDriver compatible
         log.tor("Obteniendo ChromeDriver...")
         chromedriver_path = ChromeDriverManager().install()
         service = ChromeService(executable_path=chromedriver_path)
 
-        # 3.2 Crear driver
         driver = webdriver.Chrome(service=service, options=options)
         log.tor("✅ Driver creado")
 
-        # 3.3 Eliminar rastros de automation
+        # Eliminar rastros de automation
         driver.execute_script("""
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
-
             window.chrome = {
                 runtime: {},
                 loadTimes: function() {},
@@ -188,38 +174,22 @@ def new_chrome_driver(worker_id=None):
             };
         """)
 
-        # 3.4 Configurar timeouts
+        # Configurar timeouts
         driver.set_page_load_timeout(60)
         driver.set_script_timeout(30)
         driver.implicitly_wait(15)
 
-        # ========== PASO 4: VERIFICAR TOR EN EL NAVEGADOR ==========
-        # Solo verificamos, pero sin saturar la consola
-        log.tor("Verificando TOR en navegador...")
-        try:
-            driver.set_page_load_timeout(45)
-            driver.get("https://check.torproject.org")
-            time.sleep(5)
-
-            if "Congratulations" in driver.page_source:
-                log.tor("✅ Navegador usando TOR")
-
-                driver.get("https://api.ipify.org")
+        # Verificación rápida (solo en debug)
+        if ENV.upper() != "PRODUCTION":
+            try:
+                driver.set_page_load_timeout(30)
+                driver.get("https://check.torproject.org")
                 time.sleep(3)
-                browser_ip = driver.find_element(By.TAG_NAME, "body").text.strip()
-                log.tor(f"IP navegador: {browser_ip}")
-            else:
-                log.tor("⚠️ Navegador NO está usando TOR")
-
-        except Exception as e:
-            log.tor(f"Error verificando TOR: {e}")
-
-        # Siempre navegar al sitio objetivo
-        try:
-            driver.get("https://consultaprocesos.ramajudicial.gov.co")
-            time.sleep(3)
-        except:
-            pass
+                if "Congratulations" in driver.page_source:
+                    log.tor("✅ Navegador usando TOR")
+                driver.get("https://consultaprocesos.ramajudicial.gov.co")
+            except:
+                pass
 
         log.exito("Driver listo")
         return driver
@@ -276,23 +246,6 @@ def test_javascript(driver):
         return False
 
 
-def check_tor_connection(driver):
-    """Verifica que está usando TOR."""
-    try:
-        driver.get("https://check.torproject.org")
-        time.sleep(3)
-
-        if "Congratulations" in driver.page_source:
-            log.tor("✅ Navegador usando TOR")
-            return True
-        else:
-            log.tor("⚠️ No se detecta TOR")
-            return False
-    except Exception as e:
-        log.tor(f"Error verificando TOR: {e}")
-        return False
-
-
 def handle_modal_error(driver, numero):
     """Maneja el modal de error de red."""
     try:
@@ -310,12 +263,8 @@ def handle_modal_error(driver, numero):
         log.accion("Cerrando modal...")
         time.sleep(3)
 
-        if wait_for_tor_circuit(timeout=60):
-            log.tor("TOR recuperado")
-            return True
-        else:
-            log.error("TOR no se recuperó")
-            return False
+        # No verificamos TOR aquí, solo cerramos el modal
+        return True
 
     except Exception as e:
         log.debug(f"No hay modal de error: {e}")

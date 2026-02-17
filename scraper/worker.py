@@ -10,7 +10,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 from .config import DIAS_BUSQUEDA
-from .browser import is_page_maintenance, test_javascript, wait_for_tor_circuit
+from .browser import is_page_maintenance, test_javascript, handle_modal_error
 from .logger import log
 
 # Configuración
@@ -39,45 +39,6 @@ def save_debug_info(driver, numero, step_name):
         log.error(f"Error guardando debug {step_name}: {e}")
 
 
-def handle_network_modal(driver, numero):
-    """
-    Detecta y maneja el modal de error de red.
-    Retorna True si se manejó un modal, False si no.
-    """
-    try:
-        # Buscar modal activo
-        modals = driver.find_elements(By.XPATH, "//div[contains(@class, 'v-dialog--active')]")
-
-        if modals:
-            log.advertencia(f"Modal detectado para {numero}")
-            save_debug_info(driver, numero, "modal_detectado")
-
-            # Buscar cualquier botón dentro del modal
-            buttons = modals[0].find_elements(By.XPATH, ".//button")
-            if buttons:
-                log.accion("Cerrando modal...")
-                driver.execute_script("arguments[0].click();", buttons[0])
-                time.sleep(3)
-
-                # Reintentar la consulta
-                log.accion("Reintentando consulta...")
-                try:
-                    consultar_btn = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.XPATH,
-                                                    "//button[.//span[contains(text(), 'Consultar')]]"
-                                                    ))
-                    )
-                    driver.execute_script("arguments[0].click();", consultar_btn)
-                    log.debug("Reintento de consulta ejecutado")
-                    return True
-                except:
-                    pass
-        return False
-    except Exception as e:
-        log.debug(f"Error manejando modal: {e}")
-        return False
-
-
 def wait_for_results(driver, timeout=60):
     """
     Espera a que la página cargue resultados o muestre modal de error.
@@ -99,7 +60,6 @@ def wait_for_results(driver, timeout=60):
             # 2. Verificar si hay tabla de resultados
             tables = driver.find_elements(By.XPATH, "//table")
             if tables:
-                # Verificar que la tabla tenga filas
                 for table in tables:
                     rows = table.find_elements(By.XPATH, ".//tbody//tr")
                     if rows:
@@ -117,7 +77,6 @@ def wait_for_results(driver, timeout=60):
                                            "//*[contains(@class, 'v-progress-circular')]"
                                            )
             if not loading:
-                # Si no hay loading y no hay resultados, esperar un poco más
                 time.sleep(2)
 
         except Exception as e:
@@ -140,17 +99,13 @@ def worker_task(numero, driver, results, actes, errors, lock):
     log.debug(f"Fecha corte: {cutoff}")
 
     try:
-        # ========== PASO 1: VERIFICAR TOR ==========
-        if not wait_for_tor_circuit(timeout=30):
-            log.advertencia("TOR no listo, continuando...")
-
-        # ========== PASO 2: CARGAR PÁGINA DE CONSULTA ==========
+        # ========== PASO 1: CARGAR PÁGINA DE CONSULTA ==========
         log.accion("Cargando consulta...")
         driver.get("https://consultaprocesos.ramajudicial.gov.co/Procesos/NumeroRadicacion")
         time.sleep(5)
         save_debug_info(driver, numero, "01_pagina_cargada")
 
-        # ========== PASO 3: ESPERAR QUE EL CAMPO DE TEXTO ESTÉ DISPONIBLE ==========
+        # ========== PASO 2: ESPERAR QUE EL CAMPO DE TEXTO ESTÉ DISPONIBLE ==========
         try:
             input_field = WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.XPATH, "//input[@maxlength='23']"))
@@ -161,7 +116,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
             save_debug_info(driver, numero, "02_error_no_input")
             raise Exception("Campo de texto no encontrado")
 
-        # ========== PASO 4: INGRESAR EL NÚMERO DE RADICACIÓN ==========
+        # ========== PASO 3: INGRESAR EL NÚMERO DE RADICACIÓN ==========
         log.accion("Ingresando número...")
 
         input_field.clear()
@@ -183,7 +138,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
         save_debug_info(driver, numero, "03_numero_ingresado")
         time.sleep(random.uniform(1, 2))
 
-        # ========== PASO 5: SELECCIONAR "TODOS LOS PROCESOS" ==========
+        # ========== PASO 4: SELECCIONAR "TODOS LOS PROCESOS" ==========
         try:
             radio_buttons = driver.find_elements(By.XPATH,
                                                  "//div[contains(@class, 'v-radio')]//label"
@@ -197,7 +152,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
         except Exception as e:
             log.debug(f"No se pudo seleccionar radio button: {e}")
 
-        # ========== PASO 6: HACER CLICK EN CONSULTAR ==========
+        # ========== PASO 5: HACER CLICK EN CONSULTAR ==========
         log.accion("Consultando...")
 
         try:
@@ -218,10 +173,9 @@ def worker_task(numero, driver, results, actes, errors, lock):
             except:
                 raise
 
-        # ========== PASO 7: ESPERAR RESULTADOS CON MANEJO DE MODAL ==========
+        # ========== PASO 6: ESPERAR RESULTADOS CON MANEJO DE MODAL ==========
         log.accion("Esperando resultados...")
 
-        # Primer intento de espera
         result_status = wait_for_results(driver, timeout=45)
 
         # Si hay modal, manejarlo y reintentar
@@ -229,7 +183,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
             log.advertencia("Modal de error detectado, intentando recuperación...")
             save_debug_info(driver, numero, "modal_error")
 
-            if handle_network_modal(driver, numero):
+            if handle_modal_error(driver, numero):
                 log.accion("Reintentando después de modal...")
                 result_status = wait_for_results(driver, timeout=45)
             else:
@@ -238,7 +192,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
 
         save_debug_info(driver, numero, "04_despues_consultar")
 
-        # ========== PASO 8: PROCESAR RESULTADOS SEGÚN EL ESTADO ==========
+        # ========== PASO 7: PROCESAR RESULTADOS SEGÚN EL ESTADO ==========
         if result_status == 'success':
             log.proceso("Resultados encontrados")
 
@@ -330,7 +284,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
             log.advertencia("Timeout esperando resultados")
             save_debug_info(driver, numero, "timeout_resultados")
 
-        # ========== PASO 9: FINALIZAR ==========
+        # ========== PASO 8: FINALIZAR ==========
         with lock:
             results.append((numero, driver.current_url))
 

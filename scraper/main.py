@@ -80,16 +80,24 @@ def probar_procesos(lista_procesos):
     Útil para modo DEBUG con múltiples procesos.
     """
     import itertools, threading
+    import time
     from .browser import new_chrome_driver, wait_for_tor_circuit
     from .worker import worker_task
     import scraper.worker as worker
+    from .logger import log
 
     log.titulo(f"MODO PRUEBA - {len(lista_procesos)} PROCESOS")
 
     # ========== PASO 1: ESPERAR A QUE TOR ESTÉ LISTO ==========
-    log.progreso("Verificando TOR...")
+    log.progreso("Verificando TOR (puede tardar hasta 3 minutos)...")
+    log.info("Esto es normal en la primera ejecución del día")
+
     if not wait_for_tor_circuit(timeout=180):
         log.error("❌ TOR no está listo después de 180 segundos. Abortando prueba.")
+        log.info("Posibles soluciones:")
+        log.info("  • Revisar conectividad de red")
+        log.info("  • Intentar nuevamente en 5 minutos")
+        log.info("  • Verificar logs en /home/logs/ para más detalles")
         return
 
     # ========== PASO 2: TOR LISTO, INICIAR DRIVER ==========
@@ -101,7 +109,7 @@ def probar_procesos(lista_procesos):
     worker.process_counter = itertools.count(1)
     worker.TOTAL_PROCESSES = len(lista_procesos)
 
-    # Crear driver
+    # Crear driver (YA NO verifica TOR porque ya lo hicimos)
     driver = new_chrome_driver(0)
 
     try:
@@ -112,37 +120,59 @@ def probar_procesos(lista_procesos):
             log.progreso(f"[{i}/{len(lista_procesos)}] {numero}")
 
             try:
+                # Captura antes del proceso
                 save_debug_page(driver, f"inicio_{i}", numero)
+
+                # Ejecutar worker_task (YA NO verifica TOR internamente)
                 worker_task(numero, driver, results, actes, errors, lock)
+
+                # Captura después del proceso
                 save_debug_page(driver, f"fin_{i}", numero)
+
                 log.exito(f"Proceso {i} completado")
+
             except Exception as e:
                 log.error(f"Error en proceso {i}: {e}")
                 save_debug_page(driver, f"error_{i}", numero)
 
-            # Pequeña pausa entre procesos
+            # Pequeña pausa entre procesos para no saturar
             time.sleep(2)
 
+        # ========== MOSTRAR RESULTADOS FINALES ==========
         log.titulo("RESULTADOS FINALES")
         log.resultado(f"Total procesos: {len(lista_procesos)}")
         log.resultado(f"Actuaciones encontradas: {len(actes)}")
         log.resultado(f"Errores: {len(errors)}")
+        log.separador()
 
         if actes:
             log.progreso("Primeras 10 actuaciones:")
             for i, act in enumerate(actes[:10], 1):
                 log.proceso(f"  {i}. {act[1]} - {act[2][:80]}...")
+            log.separador()
 
         if errors:
             log.advertencia("Procesos con error:")
             for num, msg in errors:
                 log.advertencia(f"  • {num}: {msg[:100]}")
+            log.separador()
+
+        # ========== GUARDAR LOG DE ACTUACIONES ==========
+        if actes:
+            try:
+                from .reporter import generar_pdf
+                generar_pdf(len(lista_procesos), actes, errors, time.time(), time.time())
+                log.exito("PDF generado")
+            except Exception as e:
+                log.error(f"Error generando PDF: {e}")
 
     except Exception as e:
         log.error(f"Error general en prueba: {e}")
+
     finally:
         driver.quit()
         log.exito("Driver cerrado")
+        log.separador()
 
 
 def exportar_csv(actes, start_ts):
