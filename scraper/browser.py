@@ -39,7 +39,7 @@ def renew_tor_circuit():
         return False
 
 
-def wait_for_tor_circuit(timeout=180):
+def wait_for_tor_circuit(timeout=380):
     """
     Espera ACTIVAMENTE hasta que TOR tenga un circuito de salida funcionando.
     """
