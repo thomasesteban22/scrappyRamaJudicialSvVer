@@ -1,4 +1,3 @@
-# Dockerfile
 FROM python:3.11-slim-bullseye
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -6,6 +5,7 @@ ENV PYTHONUNBUFFERED=1
 ENV TZ=America/Bogota
 ENV DISPLAY=:99
 
+# Instalar dependencias del sistema, incluyendo tor
 RUN apt-get update && apt-get install -y \
     wget curl tor xvfb \
     gnupg ca-certificates \
@@ -17,12 +17,13 @@ RUN apt-get update && apt-get install -y \
     && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
-# Configurar TOR con puerto de control (necesario para stem)
+# Configurar TOR con puerto de control
 RUN echo "SocksPort 127.0.0.1:9050" > /etc/tor/torrc \
     && echo "ControlPort 127.0.0.1:9051" >> /etc/tor/torrc \
     && echo "CookieAuthentication 1" >> /etc/tor/torrc \
     && echo "Log notice stdout" >> /etc/tor/torrc
 
+# Instalar Chrome
 RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
     && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \
@@ -37,4 +38,5 @@ RUN mkdir -p /app/debug /app/output /app/data
 
 COPY . .
 
+# Aumentamos el sleep para dar tiempo a TOR de arrancar
 CMD sh -c "tor & sleep 180 && Xvfb :99 -screen 0 1920x1080x24 & export DISPLAY=:99 && sleep 10 && python -m scraper.main"

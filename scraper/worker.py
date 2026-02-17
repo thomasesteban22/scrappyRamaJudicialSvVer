@@ -7,24 +7,28 @@ from datetime import date, timedelta, datetime
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException
 
-from .config import DIAS_BUSQUEDA
-from .browser import is_page_maintenance, test_javascript, handle_modal_error, renew_tor_circuit
+from .config import DIAS_BUSQUEDA, DEBUG_SCRAPER
+from .browser import handle_modal_error, renew_tor_circuit
 from .logger import log
 
-# Configuración
+# Directorios de debug (solo se usan si DEBUG_SCRAPER=True)
 DEBUG_DIR = os.path.join(os.getcwd(), "debug")
 SCREENSHOT_DIR = os.path.join(DEBUG_DIR, "screenshots")
 HTML_DIR = os.path.join(DEBUG_DIR, "html")
-os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-os.makedirs(HTML_DIR, exist_ok=True)
+if DEBUG_SCRAPER:
+    os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+    os.makedirs(HTML_DIR, exist_ok=True)
 
 process_counter = itertools.count(1)
 TOTAL_PROCESSES = 0
 
 
 def save_debug_info(driver, numero, step_name):
+    """Guarda screenshot y HTML solo si DEBUG_SCRAPER está activado."""
+    if not DEBUG_SCRAPER:
+        return
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     ss_path = os.path.join(SCREENSHOT_DIR, f"{numero}_{step_name}_{timestamp}.png")
     html_path = os.path.join(HTML_DIR, f"{numero}_{step_name}_{timestamp}.html")
@@ -39,12 +43,8 @@ def save_debug_info(driver, numero, step_name):
 
 def wait_for_results(driver, timeout=60):
     """
-    Espera a que la página cargue resultados o muestre modal de error.
-    Retorna:
-        'success' - Resultados encontrados
-        'no_results' - Mensaje de "no se encontraron"
-        'modal' - Modal de error detectado
-        'timeout' - Timeout
+    Espera a que la página cargue resultados o muestre modal.
+    Retorna: 'success', 'no_results', 'modal', 'timeout'
     """
     start_time = time.time()
     while time.time() - start_time < timeout:
@@ -64,8 +64,7 @@ def wait_for_results(driver, timeout=60):
 
             # Mensaje de "no se encontraron"
             no_results = driver.find_elements(By.XPATH,
-                "//*[contains(text(), 'No se encontraron') or contains(text(), 'Sin resultados')]"
-            )
+                "//*[contains(text(), 'No se encontraron') or contains(text(), 'Sin resultados')]")
             if no_results:
                 return 'no_results'
 
@@ -76,9 +75,7 @@ def wait_for_results(driver, timeout=60):
 
         except Exception as e:
             log.debug(f"Error en wait_for_results: {e}")
-
         time.sleep(2)
-
     return 'timeout'
 
 
@@ -98,13 +95,12 @@ def worker_task(numero, driver, results, actes, errors, lock):
         try:
             log.accion(f"Intento {attempt+1}/{max_retries}")
 
-            # ========== CARGAR PÁGINA ==========
-            log.accion("Cargando consulta...")
+            # Cargar página
             driver.get("https://consultaprocesos.ramajudicial.gov.co/Procesos/NumeroRadicacion")
             time.sleep(5)
             save_debug_info(driver, numero, f"01_pagina_cargada_a{attempt}")
 
-            # ========== CAMPO DE TEXTO ==========
+            # Campo de texto
             input_field = WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.XPATH, "//input[@maxlength='23']"))
             )
@@ -121,32 +117,32 @@ def worker_task(numero, driver, results, actes, errors, lock):
             save_debug_info(driver, numero, f"03_numero_ingresado_a{attempt}")
             time.sleep(random.uniform(1, 2))
 
-            # ========== RADIO BUTTON ==========
+            # Radio button "Todos los Procesos"
             try:
-                radio_buttons = driver.find_elements(By.XPATH, "//div[contains(@class, 'v-radio')]//label")
-                for radio in radio_buttons:
-                    if "Todos los Procesos" in radio.text:
+                radios = driver.find_elements(By.XPATH, "//div[contains(@class, 'v-radio')]//label")
+                for r in radios:
+                    if "Todos los Procesos" in r.text:
                         log.accion("Opción: Todos los Procesos")
-                        radio.click()
+                        r.click()
                         time.sleep(1)
                         break
             except Exception as e:
                 log.debug(f"No se pudo seleccionar radio: {e}")
 
-            # ========== CLICK CONSULTAR ==========
+            # Click en Consultar
             consultar_btn = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[.//span[contains(text(), 'Consultar')]]"))
             )
             driver.execute_script("arguments[0].click();", consultar_btn)
             log.accion("Consultando...")
 
-            # ========== ESPERAR RESULTADOS ==========
+            # Esperar resultados
             result_status = wait_for_results(driver, timeout=45)
             save_debug_info(driver, numero, f"04_despues_consultar_a{attempt}")
 
             if result_status == 'success':
                 log.proceso("Resultados encontrados")
-                # Procesar tabla
+                # Procesar tabla (similar a tu código actual)
                 tables = driver.find_elements(By.XPATH, "//table")
                 for table in tables:
                     rows = table.find_elements(By.XPATH, ".//tbody//tr")
@@ -155,21 +151,12 @@ def worker_task(numero, driver, results, actes, errors, lock):
                         save_debug_info(driver, numero, f"05_tabla_resultados_a{attempt}")
                         cells = rows[0].find_elements(By.TAG_NAME, "td")
                         if len(cells) >= 3:
-                            # Número de radicación
-                            try:
-                                num_btn = cells[1].find_element(By.TAG_NAME, "button")
-                                proceso_num = num_btn.text.strip()
-                            except:
-                                proceso_num = cells[1].text.strip()
-                            log.debug(f"Proceso: {proceso_num}")
-
-                            # Fecha
+                            # Extraer fecha
                             try:
                                 fecha_btn = cells[2].find_element(By.TAG_NAME, "button")
                                 fecha_text = fecha_btn.text.strip()
                                 log.proceso(f"Fecha: {fecha_text}")
                                 fecha_obj = datetime.strptime(fecha_text, "%Y-%m-%d").date()
-
                                 if fecha_obj >= cutoff:
                                     log.exito("✓ DENTRO del período")
                                     driver.execute_script("arguments[0].click();", fecha_btn)
@@ -211,8 +198,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
                             except Exception as e:
                                 log.debug(f"No se pudo extraer fecha: {e}")
                         break
-                # Éxito, salir del bucle de reintentos
-                break
+                break  # Éxito, salir del bucle de reintentos
 
             elif result_status == 'no_results':
                 log.proceso("No hay resultados para este proceso")
@@ -221,16 +207,16 @@ def worker_task(numero, driver, results, actes, errors, lock):
             elif result_status == 'modal':
                 log.advertencia(f"Modal detectado en intento {attempt+1}")
                 save_debug_info(driver, numero, f"modal_a{attempt}")
-                # Intentar cerrar modal (por si acaso)
                 handle_modal_error(driver, numero)
-                # Renovar circuito TOR (o fallback)
                 if renew_tor_circuit():
                     log.exito("Circuito TOR renovado, reintentando...")
-                    continue  # Siguiente intento
-                else:
-                    log.error("No se pudo renovar circuito TOR, pero se intentará de todos modos")
-                    # Aún así, reintentamos
                     continue
+                else:
+                    log.error("No se pudo renovar circuito TOR")
+                    if attempt == max_retries - 1:
+                        raise Exception("Error de red no recuperable después de reintentos")
+                    else:
+                        continue
 
             elif result_status == 'timeout':
                 log.advertencia("Timeout esperando resultados")
@@ -254,7 +240,6 @@ def worker_task(numero, driver, results, actes, errors, lock):
                 else:
                     continue
 
-    # Registrar resultado final
     with lock:
         results.append((numero, driver.current_url))
     log.exito("Proceso completado")
