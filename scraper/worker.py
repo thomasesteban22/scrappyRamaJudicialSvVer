@@ -223,16 +223,14 @@ def worker_task(numero, driver, results, actes, errors, lock):
                 save_debug_info(driver, numero, f"modal_a{attempt}")
                 # Intentar cerrar modal (por si acaso)
                 handle_modal_error(driver, numero)
-                # Renovar circuito TOR
+                # Renovar circuito TOR (o fallback)
                 if renew_tor_circuit():
                     log.exito("Circuito TOR renovado, reintentando...")
                     continue  # Siguiente intento
                 else:
-                    log.error("No se pudo renovar circuito TOR")
-                    if attempt == max_retries - 1:
-                        raise Exception("Error de red no recuperable después de reintentos")
-                    else:
-                        continue
+                    log.error("No se pudo renovar circuito TOR, pero se intentará de todos modos")
+                    # Aún así, reintentamos
+                    continue
 
             elif result_status == 'timeout':
                 log.advertencia("Timeout esperando resultados")

@@ -1,4 +1,4 @@
-# Dockerfile - Aumentar tiempos de espera para TOR
+# Dockerfile
 FROM python:3.11-slim-bullseye
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -17,6 +17,12 @@ RUN apt-get update && apt-get install -y \
     && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
+# Configurar TOR con puerto de control (necesario para stem)
+RUN echo "SocksPort 127.0.0.1:9050" > /etc/tor/torrc \
+    && echo "ControlPort 127.0.0.1:9051" >> /etc/tor/torrc \
+    && echo "CookieAuthentication 1" >> /etc/tor/torrc \
+    && echo "Log notice stdout" >> /etc/tor/torrc
+
 RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
     && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \
@@ -31,5 +37,4 @@ RUN mkdir -p /app/debug /app/output /app/data
 
 COPY . .
 
-# AUMENTAR TIEMPOS DE ESPERA: TOR tarda ~2.5 minutos
 CMD sh -c "tor & sleep 180 && Xvfb :99 -screen 0 1920x1080x24 & export DISPLAY=:99 && sleep 10 && python -m scraper.main"

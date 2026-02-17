@@ -23,17 +23,20 @@ os.environ['TOR_LOG'] = 'notice stderr'
 def renew_tor_circuit():
     """
     Solicita a TOR una nueva identidad (nuevo circuito de salida).
+    Si falla la conexión al puerto de control, espera 10 segundos (fallback simple).
     Retorna True si se logra, False en caso contrario.
     """
     try:
         with Controller.from_port(port=9051) as controller:
-            controller.authenticate()  # Usa cookie de autenticación
+            controller.authenticate()
             controller.signal(Signal.NEWNYM)
-            time.sleep(5)  # Esperar a que se establezca el nuevo circuito
+            time.sleep(5)
             log.tor("Circuito TOR renovado exitosamente")
             return True
     except Exception as e:
         log.error(f"Error renovando circuito TOR: {e}")
+        log.info("Fallback: esperando 10 segundos antes de reintentar...")
+        time.sleep(10)
         return False
 
 
