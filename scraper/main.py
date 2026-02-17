@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
+import requests
 
 # Importar nuestro logger primero
 from .logger import log
