@@ -39,27 +39,27 @@ def renew_tor_circuit():
         return False
 
 
-def wait_for_tor_circuit(timeout=380):
+def wait_for_tor_circuit(timeout=600):  # Timeout por defecto: 10 minutos
     """
     Espera ACTIVAMENTE hasta que TOR tenga un circuito de salida funcionando.
+    Reintenta cada 5 segundos hasta que lo consigue o se alcanza el timeout.
     """
     start_time = time.time()
-    log.info(f"Verificando conexión TOR (timeout={timeout}s)...")
+    log.info("Conectando a la red TOR (puede tomar varios minutos en el primer inicio)...")
     log.tor("Iniciando verificación de circuito TOR")
 
+    # Obtener IP directa
     direct_ip = None
     try:
-        log.tor("Obteniendo IP directa...")
         direct_response = requests.get('https://api.ipify.org', timeout=10)
         if direct_response.status_code == 200:
             direct_ip = direct_response.text.strip()
-            log.tor(f"✅ IP Directa obtenida: {direct_ip}")
+            log.tor(f"IP Directa: {direct_ip}")
     except Exception as e:
         log.tor(f"No se pudo obtener IP directa: {e}")
 
     attempts = 0
     last_log_time = 0
-    consecutive_errors = 0
 
     while time.time() - start_time < timeout:
         attempts += 1
@@ -78,7 +78,7 @@ def wait_for_tor_circuit(timeout=380):
 
                 if direct_ip and tor_ip != direct_ip:
                     elapsed = int(time.time() - start_time)
-                    log.tor(f"✅ TOR FUNCIONANDO! IP: {tor_ip} (en {elapsed}s)")
+                    log.tor(f"✅ TOR LISTO! IP: {tor_ip} (en {elapsed}s)")
                     log.exito(f"Conexión TOR establecida ({elapsed} segundos)")
                     return True
                 elif not direct_ip:
@@ -86,27 +86,20 @@ def wait_for_tor_circuit(timeout=380):
                     log.exito("Conexión TOR establecida")
                     return True
                 else:
-                    log.tor(f"⚠️ TOR tiene misma IP que directa ({tor_ip})")
+                    log.tor(f"⚠️ TOR misma IP que directa ({tor_ip})")
 
         except Exception as e:
+            # Solo mostramos progreso cada 30 segundos para no saturar
             current_time = time.time()
             if current_time - last_log_time > 30:
                 elapsed = int(time.time() - start_time)
-                porcentaje = min(100, int((elapsed / timeout) * 100))
-                log.progreso(f"Esperando TOR... {porcentaje}% ({elapsed}s/{timeout}s) - {attempts} intentos")
-                if consecutive_errors > 5:
-                    log.tor(f"   ⚠️ {consecutive_errors} errores consecutivos")
+                log.progreso(f"Esperando TOR... {elapsed}s transcurridos")
                 last_log_time = current_time
-            consecutive_errors += 1
 
         time.sleep(5)
 
     log.error(f"❌ TOR no estableció circuito después de {timeout} segundos")
-    log.error(f"   • Intentos realizados: {attempts}")
-    log.error(f"   • IP Directa: {direct_ip if direct_ip else 'No disponible'}")
-    log.info("📌 Posibles soluciones: verificar TOR, red, etc.")
     return False
-
 
 def new_chrome_driver(worker_id=None):
     """Crea un driver de Chrome configurado para usar TOR."""

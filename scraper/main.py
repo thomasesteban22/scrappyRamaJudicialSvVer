@@ -12,12 +12,11 @@ from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-import requests
 
 # Importar nuestro logger primero
 from .logger import log
 
-# Configuración de directorios debug (igual que antes)
+# Configuración de directorios debug (se crean siempre, pero solo se usan si DEBUG_SCRAPER=True)
 DEBUG_DIR = os.path.join(os.getcwd(), "debug")
 SCREENSHOT_DIR = os.path.join(DEBUG_DIR, "screenshots")
 HTML_DIR = os.path.join(DEBUG_DIR, "html")
@@ -37,7 +36,7 @@ from .config import (
     DIAS_BUSQUEDA
 )
 from .loader import cargar_procesos
-from .browser import new_chrome_driver
+from .browser import new_chrome_driver, wait_for_tor_circuit
 from .worker import worker_task
 import scraper.worker as worker
 from .reporter import generar_pdf
@@ -47,21 +46,18 @@ from .reporter import generar_pdf
 
 def setup_environment():
     """Configura entorno para evitar detección"""
-    # Limpiar variables de entorno de Selenium
     os.environ.pop('SE_DRIVER_PATH', None)
     os.environ.pop('SE_BINARY_PATH', None)
-
-    # Verificar Xvfb
     display = os.environ.get('DISPLAY', ':99')
     os.environ['DISPLAY'] = display
-
-    # Log de entorno (solo a archivo)
     log.debug(f"DISPLAY configurado: {display}")
     log.debug(f"Entorno Python: {sys.version}")
 
 
 def save_debug_page(driver, step_name="step", numero="unknown"):
-    """Guarda screenshot y HTML para inspección (solo logs a archivo)."""
+    """Guarda screenshot y HTML solo si DEBUG_SCRAPER está activado."""
+    if not DEBUG_SCRAPER:
+        return
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     ss_path = os.path.join(SCREENSHOT_DIR, f"{numero}_{step_name}_{timestamp}.png")
@@ -77,40 +73,28 @@ def save_debug_page(driver, step_name="step", numero="unknown"):
 
 def probar_procesos(lista_procesos):
     """
-    Ejecuta worker_task para una lista de procesos.
-    Útil para modo DEBUG con múltiples procesos.
+    Ejecuta worker_task para una lista de procesos (modo DEBUG).
     """
-    import itertools, threading
-    import time
-    from .browser import new_chrome_driver, wait_for_tor_circuit
-    from .worker import worker_task
-    import scraper.worker as worker
-    from .logger import log
-
+    import threading
     log.titulo(f"MODO PRUEBA - {len(lista_procesos)} PROCESOS")
 
-    # ========== PASO 1: ESPERAR A QUE TOR ESTÉ LISTO ==========
-    log.progreso("Verificando TOR (puede tardar hasta 3 minutos)...")
+    # ========== PASO 1: ESPERAR A QUE TOR ESTÉ LISTO (tiempo ilimitado) ==========
+    log.progreso("Verificando TOR (puede tardar varios minutos)...")
     log.info("Esto es normal en la primera ejecución del día")
 
-    if not wait_for_tor_circuit(timeout=180):
-        log.error("❌ TOR no está listo después de 180 segundos. Abortando prueba.")
-        log.info("Posibles soluciones:")
-        log.info("  • Revisar conectividad de red")
-        log.info("  • Intentar nuevamente en 5 minutos")
-        log.info("  • Verificar logs en /home/logs/ para más detalles")
+    # Usamos el timeout por defecto de wait_for_tor_circuit (600s)
+    if not wait_for_tor_circuit():
+        log.error("❌ TOR no está listo. Abortando prueba.")
         return
 
     # ========== PASO 2: TOR LISTO, INICIAR DRIVER ==========
     log.exito("TOR listo. Iniciando driver...")
 
-    # Inicialización
     results, actes, errors = [], [], []
     lock = threading.Lock()
     worker.process_counter = itertools.count(1)
     worker.TOTAL_PROCESSES = len(lista_procesos)
 
-    # Crear driver (YA NO verifica TOR porque ya lo hicimos)
     driver = new_chrome_driver(0)
 
     try:
@@ -121,151 +105,103 @@ def probar_procesos(lista_procesos):
             log.progreso(f"[{i}/{len(lista_procesos)}] {numero}")
 
             try:
-                # Captura antes del proceso
                 save_debug_page(driver, f"inicio_{i}", numero)
-
-                # Ejecutar worker_task (YA NO verifica TOR internamente)
                 worker_task(numero, driver, results, actes, errors, lock)
-
-                # Captura después del proceso
                 save_debug_page(driver, f"fin_{i}", numero)
-
                 log.exito(f"Proceso {i} completado")
-
             except Exception as e:
                 log.error(f"Error en proceso {i}: {e}")
                 save_debug_page(driver, f"error_{i}", numero)
 
-            # Pequeña pausa entre procesos para no saturar
             time.sleep(2)
 
-        # ========== MOSTRAR RESULTADOS FINALES ==========
         log.titulo("RESULTADOS FINALES")
         log.resultado(f"Total procesos: {len(lista_procesos)}")
         log.resultado(f"Actuaciones encontradas: {len(actes)}")
         log.resultado(f"Errores: {len(errors)}")
-        log.separador()
 
         if actes:
             log.progreso("Primeras 10 actuaciones:")
             for i, act in enumerate(actes[:10], 1):
                 log.proceso(f"  {i}. {act[1]} - {act[2][:80]}...")
-            log.separador()
 
         if errors:
             log.advertencia("Procesos con error:")
             for num, msg in errors:
                 log.advertencia(f"  • {num}: {msg[:100]}")
-            log.separador()
-
-        # ========== GUARDAR LOG DE ACTUACIONES ==========
-        if actes:
-            try:
-                from .reporter import generar_pdf
-                generar_pdf(len(lista_procesos), actes, errors, time.time(), time.time())
-                log.exito("PDF generado")
-            except Exception as e:
-                log.error(f"Error generando PDF: {e}")
 
     except Exception as e:
         log.error(f"Error general en prueba: {e}")
-
     finally:
         driver.quit()
         log.exito("Driver cerrado")
-        log.separador()
 
 
 def exportar_csv(actes, start_ts):
-    """Exporta las actuaciones a CSV."""
     fecha_registro = date.fromtimestamp(start_ts).isoformat()
     csv_path = os.path.join(OUTPUT_DIR, "actuaciones.csv")
-    headers = [
-        "idInterno",
-        "quienRegistro",
-        "fechaRegistro",
-        "fechaEstado",
-        "etapa",
-        "actuacion",
-        "observacion"
-    ]
+    headers = ["idInterno", "quienRegistro", "fechaRegistro", "fechaEstado", "etapa", "actuacion", "observacion"]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
         for numero, fecha, actu, anota, _url in actes:
-            writer.writerow([
-                numero,
-                "Sistema",
-                fecha_registro,
-                fecha,
-                "",
-                actu,
-                anota
-            ])
+            writer.writerow([numero, "Sistema", fecha_registro, fecha, "", actu, anota])
     log.resultado(f"CSV generado: {csv_path}")
 
 
 def send_report_email():
-    """Envía el reporte por correo."""
     now = datetime.now()
     fecha_str = now.strftime("%A %d-%m-%Y a las %I:%M %p").capitalize()
-
     try:
         smtp = smtplib.SMTP_SSL("smtp.gmail.com", 465)
         smtp.login(EMAIL_USER, EMAIL_PASS)
-
         msg = MIMEMultipart()
         msg["Subject"] = f"Reporte Diario de Actuaciones - {fecha_str}"
         msg["From"] = EMAIL_USER
         msg["To"] = EMAIL_USER
-
         cuerpo = f"Adjunto encontrarás el reporte de actuaciones generado el {fecha_str}."
         msg.attach(MIMEText(cuerpo, "plain"))
-
         if os.path.exists(PDF_PATH):
             with open(PDF_PATH, "rb") as f:
                 part = MIMEApplication(f.read(), Name=os.path.basename(PDF_PATH))
                 part.add_header('Content-Disposition', 'attachment', filename=os.path.basename(PDF_PATH))
                 msg.attach(part)
-
         smtp.sendmail(EMAIL_USER, [EMAIL_USER], msg.as_string())
         smtp.quit()
         log.exito("Correo enviado")
-
     except Exception as e:
         log.error(f"Error enviando correo: {e}")
 
 
 def ejecutar_ciclo():
-    """Ejecuta un ciclo completo de scraping, reporte, CSV y correo."""
-
+    """Ejecuta un ciclo completo de scraping (producción)."""
     log.titulo("INICIANDO CICLO DE SCRAPING")
     log.resultado(f"📅 Fecha: {datetime.now().strftime('%d/%m/%Y')}")
     log.resultado(f"🎯 Período: últimos {DIAS_BUSQUEDA} días")
     log.resultado(f"🔄 Hilos: {NUM_THREADS}")
     log.separador()
 
-    # Reiniciar contador de procesos
-    worker.process_counter = itertools.count(1)
+    # Verificar TOR antes de crear los drivers (por si es el primer inicio del día)
+    log.progreso("Verificando TOR antes del ciclo...")
+    if not wait_for_tor_circuit():
+        log.error("❌ TOR no está listo. Cancelando ciclo.")
+        return
 
     start_ts = time.time()
+    worker.process_counter = itertools.count(1)
 
-    # Borro PDF y CSV antiguos
+    # Limpiar archivos antiguos
     if os.path.exists(PDF_PATH):
         os.remove(PDF_PATH)
     csv_old = os.path.join(OUTPUT_DIR, "actuaciones.csv")
     if os.path.exists(csv_old):
         os.remove(csv_old)
 
-    # Carga de procesos
     procesos = cargar_procesos()
     TOTAL = len(procesos)
     worker.TOTAL_PROCESSES = TOTAL
-
     log.progreso(f"Procesos a escanear: {TOTAL}")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Preparar cola y threads
     q = Queue()
     for num in procesos:
         q.put(num)
@@ -303,7 +239,6 @@ def ejecutar_ciclo():
     for t in threads:
         t.join()
 
-    # Reportes y envío
     generar_pdf(TOTAL, actes, errors, start_ts, time.time())
     exportar_csv(actes, start_ts)
 
@@ -313,26 +248,22 @@ def ejecutar_ciclo():
         except Exception as e:
             log.error(f"Error enviando correo: {e}")
 
-    # Resumen
     err = len(errors)
     esc = TOTAL - err
-
     log.titulo("RESUMEN DEL CICLO")
     log.resultado(f"✅ Escaneados: {esc}")
     log.resultado(f"❌ Errores: {err}")
     log.resultado(f"📋 Actuaciones: {len(actes)}")
-
     if err and DEBUG_SCRAPER:
         log.advertencia("Procesos con error:")
-        for num, msg in errors[:5]:  # Solo primeros 5 en consola
+        for num, msg in errors[:5]:
             log.advertencia(f"  • {num}: {msg[:100]}")
-
     log.separador()
 
 
 def log_ip_salida():
-    """Obtiene y loguea la IP de salida."""
     try:
+        import requests
         ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
         log.info(f"IP Saliente: {ip}")
     except Exception as e:
@@ -342,18 +273,13 @@ def log_ip_salida():
 # ---------------- MAIN ---------------- #
 
 def main():
-    """Punto de entrada principal."""
-
     log.titulo("SCRAPER RAMA JUDICIAL")
     log.resultado(f"🌍 Entorno: {ENV}")
     log.resultado(f"🔧 Debug: {'ACTIVADO' if DEBUG_SCRAPER else 'DESACTIVADO'}")
     log.resultado(f"📅 Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     log.separador()
 
-    # Configurar entorno
     setup_environment()
-
-    # Log de IP de salida
     log_ip_salida()
 
     if DEBUG_SCRAPER:
@@ -366,11 +292,9 @@ def main():
             "11001310300120150030300"
         ]
         probar_procesos(procesos_prueba)
-
     else:
         # Modo producción - scheduler
         log.progreso(f"Scheduler iniciado. Próxima ejecución: {SCHEDULE_TIME}")
-
         bogota_tz = ZoneInfo("America/Bogota")
         hh, mm = map(int, SCHEDULE_TIME.split(":"))
 
@@ -381,7 +305,6 @@ def main():
                 target += timedelta(days=1)
             wait_sec = (target - now).total_seconds()
 
-            # Conteo regresivo con avisos cada hora
             remaining = wait_sec
             while remaining > 0:
                 if remaining > 3600:
