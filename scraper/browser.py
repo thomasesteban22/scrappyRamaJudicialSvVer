@@ -2,229 +2,155 @@
 import os
 import random
 import time
-import requests
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service as ChromeService
-from stem import Signal
-from stem.control import Controller
+import undetected_chromedriver as uc
+
 from .config import ENV, DEBUG_SCRAPER
 from .logger import log
 
-# ========== SILENCIAR LOGS EXTERNOS ==========
 os.environ['WDM_LOG_LEVEL'] = '0'
 os.environ['WDM_PRINT_FIRST_LINE'] = 'False'
-os.environ['TOR_LOG'] = 'notice stderr'
 
-
-def renew_tor_circuit():
-    """
-    Solicita a TOR una nueva identidad (nuevo circuito de salida).
-    Si falla, espera unos segundos como fallback.
-    """
-    try:
-        with Controller.from_port(port=9051) as controller:
-            controller.authenticate()
-            controller.signal(Signal.NEWNYM)
-            time.sleep(5)
-            log.tor("Circuito TOR renovado exitosamente")
-            return True
-    except Exception as e:
-        log.error(f"Error renovando circuito TOR: {e}")
-        log.info("Fallback: esperando 10 segundos antes de reintentar...")
-        time.sleep(10)
-        return False
-
-
-def wait_for_tor_circuit(timeout=600):  # Timeout por defecto: 10 minutos
-    """
-    Espera ACTIVAMENTE hasta que TOR tenga un circuito de salida funcionando.
-    Reintenta cada 5 segundos hasta que lo consigue o se alcanza el timeout.
-    """
-    start_time = time.time()
-    log.info("Conectando a la red TOR (puede tomar varios minutos en el primer inicio)...")
-    log.tor("Iniciando verificación de circuito TOR")
-
-    # Obtener IP directa
-    direct_ip = None
-    try:
-        direct_response = requests.get('https://api.ipify.org', timeout=10)
-        if direct_response.status_code == 200:
-            direct_ip = direct_response.text.strip()
-            log.tor(f"IP Directa: {direct_ip}")
-    except Exception as e:
-        log.tor(f"No se pudo obtener IP directa: {e}")
-
-    attempts = 0
-    last_log_time = 0
-
-    while time.time() - start_time < timeout:
-        attempts += 1
-        try:
-            session = requests.Session()
-            session.proxies = {
-                'http': 'socks5://127.0.0.1:9050',
-                'https': 'socks5://127.0.0.1:9050'
-            }
-            session.timeout = 15
-
-            response = session.get('https://api.ipify.org', timeout=15)
-
-            if response.status_code == 200:
-                tor_ip = response.text.strip()
-
-                if direct_ip and tor_ip != direct_ip:
-                    elapsed = int(time.time() - start_time)
-                    log.tor(f"✅ TOR LISTO! IP: {tor_ip} (en {elapsed}s)")
-                    log.exito(f"Conexión TOR establecida ({elapsed} segundos)")
-                    return True
-                elif not direct_ip:
-                    log.tor(f"✅ TOR responde con IP: {tor_ip}")
-                    log.exito("Conexión TOR establecida")
-                    return True
-                else:
-                    log.tor(f"⚠️ TOR misma IP que directa ({tor_ip})")
-
-        except Exception as e:
-            # Solo mostramos progreso cada 30 segundos para no saturar
-            current_time = time.time()
-            if current_time - last_log_time > 30:
-                elapsed = int(time.time() - start_time)
-                log.progreso(f"Esperando TOR... {elapsed}s transcurridos")
-                last_log_time = current_time
-
-        time.sleep(5)
-
-    log.error(f"❌ TOR no estableció circuito después de {timeout} segundos")
-    return False
 
 def new_chrome_driver(worker_id=None):
-    """Crea un driver de Chrome configurado para usar TOR."""
-    if worker_id is not None:
-        log.progreso(f"Iniciando driver {worker_id}...")
-    else:
-        log.progreso("Iniciando driver...")
+    """
+    Crea un driver de Chrome con undetected-chromedriver.
+    Usa Xvfb (display virtual) en producción en lugar de --headless,
+    lo que evita la detección de automatización.
+    """
+    label = f"driver {worker_id}" if worker_id is not None else "driver"
+    log.progreso(f"Iniciando {label}...")
 
-    options = Options()
+    options = uc.ChromeOptions()
 
-    # Anti-detección
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-    options.add_experimental_option('useAutomationExtension', False)
+    # ── Configuración base ────────────────────────────────────────────────────
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--lang=es-CO")
+    options.add_argument("--accept-lang=es-CO,es;q=0.9")
 
+    # ── Preferencias de perfil ────────────────────────────────────────────────
     prefs = {
         "credentials_enable_service": False,
         "profile.password_manager_enabled": False,
         "profile.default_content_setting_values.notifications": 2,
         "profile.default_content_setting_values.geolocation": 2,
         "profile.default_content_setting_values.images": 1,
-        "excludeSwitches": ["enable-automation"],
-        "useAutomationExtension": False,
     }
     options.add_experimental_option("prefs", prefs)
 
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--disable-extensions")
-
-    if ENV.upper() == "PRODUCTION":
-        options.add_argument("--headless=new")
-        options.add_argument("--remote-debugging-port=9222")
-
+    # ── User-Agent realista ───────────────────────────────────────────────────
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     ]
     selected_ua = random.choice(user_agents)
-    options.add_argument(f"user-agent={selected_ua}")
-    log.tor(f"User-Agent: {selected_ua[:60]}...")
+    options.add_argument(f"--user-agent={selected_ua}")
+    log.debug(f"User-Agent: {selected_ua[:70]}...")
 
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--start-maximized")
-    options.add_argument("--lang=es-ES")
-    options.add_argument("--accept-lang=es-ES,es;q=0.9")
-
-    options.add_argument('--proxy-server=socks5://127.0.0.1:9050')
-    options.add_argument('--ignore-certificate-errors')
-    options.add_argument('--ignore-ssl-errors')
-    options.add_argument('--disable-web-security')
-    options.add_argument('--allow-running-insecure-content')
-
+    # ── Estrategia de carga ───────────────────────────────────────────────────
     options.page_load_strategy = "eager"
 
     try:
-        log.tor("Obteniendo ChromeDriver...")
-        chromedriver_path = ChromeDriverManager().install()
-        service = ChromeService(executable_path=chromedriver_path)
+        log.debug("Creando instancia de Chrome (undetected)...")
 
-        driver = webdriver.Chrome(service=service, options=options)
-        log.tor("✅ Driver creado")
+        driver = uc.Chrome(
+            options=options,
+            headless=False,        # IMPORTANTE: false = usa Xvfb, no headless real
+            use_subprocess=True,   # Evita que el proceso hijo herede señales
+            version_main=None,     # Autodetecta versión de Chrome instalado
+        )
 
-        driver.execute_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            window.chrome = {
-                runtime: {},
-                loadTimes: function() {},
-                csi: function() {},
-                app: {}
-            };
-        """)
-
+        # ── Timeouts ──────────────────────────────────────────────────────────
         driver.set_page_load_timeout(60)
         driver.set_script_timeout(30)
         driver.implicitly_wait(15)
 
-        # Verificación solo en debug
+        # ── Ocultar propiedades de automatización adicionales ─────────────────
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": """
+                // Ocultar webdriver
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+
+                // Chrome runtime simulado
+                window.chrome = {
+                    runtime: {
+                        connect: () => {},
+                        sendMessage: () => {},
+                    },
+                    loadTimes: function() {},
+                    csi: function() {},
+                    app: {}
+                };
+
+                // Plugins simulados (navegador real tiene plugins)
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5],
+                });
+
+                // Idiomas
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['es-CO', 'es', 'en-US', 'en'],
+                });
+
+                // Permisos no devuelven "denied" automáticamente
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+            """
+        })
+
+        log.exito(f"✅ {label} listo")
+
+        # ── Verificación en modo debug ─────────────────────────────────────────
         if DEBUG_SCRAPER:
-            try:
-                driver.set_page_load_timeout(30)
-                log.tor("Verificando TOR en navegador...")
-                driver.get("https://check.torproject.org")
-                time.sleep(3)
-                if "Congratulations" in driver.page_source:
-                    log.tor("✅ Navegador usando TOR")
-                else:
-                    log.tor("⚠️ Navegador NO está usando TOR")
-                driver.get("https://api.ipify.org")
-                time.sleep(2)
-                browser_ip = driver.find_element(By.TAG_NAME, "body").text.strip()
-                log.tor(f"IP del navegador: {browser_ip}")
-            except Exception as e:
-                log.tor(f"Error en verificación: {e}")
+            _verificar_driver(driver)
 
-        # Siempre navegar al sitio objetivo
-        try:
-            driver.get("https://consultaprocesos.ramajudicial.gov.co")
-            time.sleep(3)
-        except:
-            pass
-
-        log.exito("Driver listo")
         return driver
 
     except Exception as e:
-        log.error(f"Error creando driver: {e}")
+        log.error(f"Error creando {label}: {e}")
         raise
 
 
-def is_page_maintenance(driver):
+def _verificar_driver(driver):
+    """Verificación rápida del driver en modo debug."""
     try:
-        body = driver.find_element(By.TAG_NAME, "body")
-        body_text = body.text.lower()
-        keywords = ["mantenimiento", "temporalmente fuera", "estamos trabajando",
-                    "servicio no disponible", "under maintenance", "en construcción"]
+        log.debug("Verificando driver (modo debug)...")
+        driver.get("https://bot.sannysoft.com")
+        time.sleep(3)
+        log.debug("Página de verificación cargada")
+
+        import requests
+        try:
+            ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
+            log.debug(f"IP de salida: {ip}")
+        except Exception:
+            log.debug("No se pudo obtener IP de salida")
+
+    except Exception as e:
+        log.debug(f"Error en verificación: {e}")
+
+
+def is_page_maintenance(driver):
+    """Detecta si la página está en mantenimiento."""
+    try:
+        body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
+        keywords = [
+            "mantenimiento", "temporalmente fuera", "estamos trabajando",
+            "servicio no disponible", "under maintenance", "en construcción"
+        ]
         for kw in keywords:
             if kw in body_text:
-                log.advertencia(f"Página en mantenimiento: {kw}")
+                log.advertencia(f"Página en mantenimiento: '{kw}'")
                 return True
         return False
     except Exception as e:
@@ -235,17 +161,23 @@ def is_page_maintenance(driver):
 def handle_modal_error(driver, numero):
     """Intenta cerrar cualquier modal activo."""
     try:
-        modal = driver.find_element(By.XPATH, "//div[contains(@class, 'v-dialog--active')]")
+        modal = driver.find_element(
+            By.XPATH, "//div[contains(@class, 'v-dialog--active')]"
+        )
         log.advertencia(f"Modal detectado para {numero}")
         buttons = modal.find_elements(By.XPATH, ".//button")
         if buttons:
             driver.execute_script("arguments[0].click();", buttons[0])
-            log.accion("Botón del modal clickeado")
+            log.accion("Modal cerrado")
             time.sleep(2)
             return True
-        else:
-            log.debug("No se encontró botón en el modal")
-            return False
-    except Exception as e:
-        log.debug(f"No hay modal: {e}")
+        log.debug("Modal sin botón de cierre")
         return False
+    except Exception as e:
+        log.debug(f"Sin modal activo: {e}")
+        return False
+
+
+def human_delay(min_s=1.0, max_s=3.0):
+    """Pausa aleatoria para simular comportamiento humano."""
+    time.sleep(random.uniform(min_s, max_s))

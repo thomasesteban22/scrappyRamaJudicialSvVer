@@ -5,38 +5,41 @@ ENV PYTHONUNBUFFERED=1
 ENV TZ=America/Bogota
 ENV DISPLAY=:99
 
-# Instalar dependencias del sistema, incluyendo tor
+# ── Sistema base ──────────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y \
-    wget curl tor xvfb \
-    gnupg ca-certificates \
+    wget curl gnupg ca-certificates \
+    xvfb \
     libnss3 libxss1 libasound2 \
     libatk-bridge2.0-0 libgtk-3-0 \
     libx11-xcb1 libdrm2 libgbm1 \
+    libxcomposite1 libxdamage1 libxrandr2 \
+    libpango-1.0-0 libcairo2 \
+    fonts-liberation \
     tzdata \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
-# Configurar TOR con puerto de control
-RUN echo "SocksPort 127.0.0.1:9050" > /etc/tor/torrc \
-    && echo "ControlPort 127.0.0.1:9051" >> /etc/tor/torrc \
-    && echo "CookieAuthentication 1" >> /etc/tor/torrc \
-    && echo "Log notice stdout" >> /etc/tor/torrc
-
-# Instalar Chrome
+# ── Google Chrome estable ─────────────────────────────────────────────────────
 RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" \
+       > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \
     && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
+# ── App ───────────────────────────────────────────────────────────────────────
 WORKDIR /app
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN mkdir -p /app/debug /app/output /app/data
+RUN mkdir -p /app/debug/screenshots /app/debug/html /app/output /app/data
 
 COPY . .
 
-# Aumentamos el sleep para dar tiempo a TOR de arrancar
-CMD sh -c "tor & sleep 180 && Xvfb :99 -screen 0 1920x1080x24 & export DISPLAY=:99 && sleep 10 && python -m scraper.main"
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+CMD ["/entrypoint.sh"]
