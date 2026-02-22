@@ -3,7 +3,7 @@ import time
 import random
 import itertools
 import os
-import requests
+import json
 from datetime import date, timedelta, datetime
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -25,7 +25,7 @@ if DEBUG_SCRAPER:
 process_counter = itertools.count(1)
 TOTAL_PROCESSES = 0
 
-# ── Configuración de la API ───────────────────────────────────────────────────
+# ── Configuración ─────────────────────────────────────────────────────────────
 API_BASE = "https://consultaprocesos.ramajudicial.gov.co:448/api/v2"
 WEB_BASE = "https://consultaprocesos.ramajudicial.gov.co"
 WEB_URL  = f"{WEB_BASE}/Procesos/NumeroRadicacion"
@@ -49,10 +49,9 @@ def save_debug_info(driver, numero, step_name):
         log.debug(f"Error guardando debug {step_name}: {e}")
 
 
-def save_debug_response(data: dict, nombre: str):
+def save_debug_response(data, nombre: str):
     if not DEBUG_SCRAPER:
         return
-    import json
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(RESPONSE_DIR, f"{nombre}_{timestamp}.json")
     try:
@@ -63,86 +62,68 @@ def save_debug_response(data: dict, nombre: str):
         log.debug(f"Error guardando response: {e}")
 
 
-def build_session(driver) -> requests.Session:
+def fetch_via_chrome(driver, url: str) -> dict | None:
     """
-    Construye una sesión requests usando las cookies y headers
-    de la sesión activa de Chrome. Así la API no puede distinguirlo
-    de un navegador real.
+    Ejecuta un fetch() directamente dentro de Chrome usando JavaScript.
+    La request sale con el fingerprint TLS real del navegador y todas
+    sus cookies — el servidor no puede distinguirlo de un usuario real.
     """
-    session = requests.Session()
-
-    # Transferir cookies del navegador a la sesión
-    for cookie in driver.get_cookies():
-        session.cookies.set(cookie['name'], cookie['value'])
-
-    # Usar el mismo User-Agent que tiene el navegador
-    ua = driver.execute_script("return navigator.userAgent")
-
-    session.headers.update({
-        "User-Agent":      ua,
-        "Accept":          "application/json, text/plain, */*",
-        "Accept-Language": "es-CO,es;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Origin":          WEB_BASE,
-        "Referer":         f"{WEB_BASE}/",
-        "Sec-Fetch-Dest":  "empty",
-        "Sec-Fetch-Mode":  "cors",
-        "Sec-Fetch-Site":  "same-site",
+    script = """
+    const url = arguments[0];
+    const callback = arguments[1];
+    fetch(url, {
+        method: 'GET',
+        headers: {
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'es-CO,es;q=0.9,en-US;q=0.8,en;q=0.7',
+        },
+        credentials: 'include'
     })
-
-    return session
-
-
-def api_get_procesos(session: requests.Session, numero: str, pagina: int = 1) -> dict | None:
+    .then(r => {
+        if (!r.ok) {
+            callback({error: r.status, message: r.statusText});
+            return;
+        }
+        return r.json();
+    })
+    .then(data => callback({ok: true, data: data}))
+    .catch(e => callback({error: 0, message: e.toString()}));
     """
-    GET /api/v2/Procesos/Consulta/NumeroRadicacion?numero=<NUM>&SoloActivos=false&pagina=1
-    """
-    url = f"{API_BASE}/Procesos/Consulta/NumeroRadicacion"
-    params = {
-        "numero":      str(numero),
-        "SoloActivos": "false",
-        "pagina":      pagina,
-    }
     try:
-        r = session.get(url, params=params, timeout=30)
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.RequestException as e:
-        log.error(f"Error en api_get_procesos({numero}): {e}")
+        result = driver.execute_async_script(script, url)
+        if result and result.get("ok"):
+            return result["data"]
+        else:
+            log.error(f"fetch_via_chrome error: {result}")
+            return None
+    except Exception as e:
+        log.error(f"Error en fetch_via_chrome: {e}")
         return None
 
 
-def api_get_actuaciones(session: requests.Session, id_proceso: int, pagina: int = 1) -> dict | None:
-    """
-    GET /api/v2/Proceso/Actuaciones/<idProceso>?pagina=1
-    Confirmado en DevTools: /api/v2/Proceso/Actuaciones/28775804?pagina=1
-    """
-    url = f"{API_BASE}/Proceso/Actuaciones/{id_proceso}"
-    params = {"pagina": pagina}
-    try:
-        r = session.get(url, params=params, timeout=30)
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.RequestException as e:
-        log.error(f"Error en api_get_actuaciones({id_proceso}): {e}")
-        return None
+def api_get_procesos(driver, numero: str, pagina: int = 1) -> dict | None:
+    url = f"{API_BASE}/Procesos/Consulta/NumeroRadicacion?numero={numero}&SoloActivos=false&pagina={pagina}"
+    return fetch_via_chrome(driver, url)
+
+
+def api_get_actuaciones(driver, id_proceso: int, pagina: int = 1) -> dict | None:
+    url = f"{API_BASE}/Proceso/Actuaciones/{id_proceso}?pagina={pagina}"
+    return fetch_via_chrome(driver, url)
 
 
 def warm_up_session(driver) -> bool:
     """
-    Navega con Chrome a la página principal para que el sitio
-    establezca cookies de sesión válidas antes de usar la API.
-    Retorna True si la página cargó correctamente.
+    Navega a la página principal para que Chrome establezca
+    cookies de sesión y el sitio reconozca la IP como válida.
     """
     try:
-        log.debug("Calentando sesión en Chrome...")
+        log.debug("Navegando a la página principal...")
         driver.get(WEB_URL)
-        # Esperar a que Vue.js cargue el componente del formulario
         WebDriverWait(driver, 20).until(
             EC.presence_of_element_located((By.XPATH, "//input[@maxlength='23']"))
         )
-        human_delay(1.5, 3.0)
-        log.debug("Sesión lista")
+        human_delay(2.0, 4.0)
+        log.debug("Sesión establecida")
         return True
     except Exception as e:
         log.error(f"Error calentando sesión: {e}")
@@ -153,10 +134,11 @@ def warm_up_session(driver) -> bool:
 
 def worker_task(numero, driver, results, actes, errors, lock):
     """
-    Flujo híbrido:
-      1. Chrome navega a la página para establecer cookies de sesión válidas
-      2. requests usa esas cookies para llamar directamente a la API
-      3. Sin interacción DOM → sin detección de bot → sin modal
+    Flujo:
+      1. Chrome navega a la página (warm-up de sesión, solo 1 vez)
+      2. fetch() desde JavaScript en el contexto del navegador llama a la API
+         → misma IP, mismo fingerprint TLS, mismas cookies → sin 403
+      3. Filtramos actuaciones dentro del período
     """
     idx = next(process_counter)
     total = TOTAL_PROCESSES or idx
@@ -173,26 +155,20 @@ def worker_task(numero, driver, results, actes, errors, lock):
         try:
             log.accion(f"Intento {attempt+1}/{max_retries}")
 
-            # ── 1. Calentar sesión con Chrome ─────────────────────────────────
-            # Solo en el primer intento o si la sesión expiró
+            # ── 1. Warm-up solo en primer intento ────────────────────────────
             if attempt == 0:
                 if not warm_up_session(driver):
-                    raise Exception("No se pudo cargar la página para establecer sesión")
-                save_debug_info(driver, numero, f"01_session_warmed_a{attempt}")
+                    raise Exception("No se pudo establecer sesión en Chrome")
+                save_debug_info(driver, numero, f"01_warmed_a{attempt}")
 
-            # ── 2. Construir sesión requests con cookies de Chrome ─────────────
-            session = build_session(driver)
-            human_delay(0.5, 1.5)
-
-            # ── 3. Consultar procesos vía API ─────────────────────────────────
-            log.debug(f"Consultando API para {numero}...")
-            data = api_get_procesos(session, str(numero))
+            # ── 2. Consultar procesos desde el contexto del navegador ─────────
+            log.debug(f"Consultando procesos para {numero}...")
+            data = api_get_procesos(driver, str(numero))
 
             if data is None:
-                # Si falla, renovar sesión en Chrome y reintentar
-                log.advertencia("API retornó error, renovando sesión...")
+                log.advertencia("Sin respuesta, renovando sesión...")
                 warm_up_session(driver)
-                raise Exception("Sin respuesta de la API — sesión renovada, reintentando")
+                raise Exception("API sin respuesta — reintentando")
 
             save_debug_response(data, f"{numero}_procesos")
 
@@ -203,7 +179,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
 
             log.proceso(f"Procesos encontrados: {len(procesos)}")
 
-            # ── 4. Iterar procesos ────────────────────────────────────────────
+            # ── 3. Revisar actuaciones por proceso ────────────────────────────
             for proceso in procesos:
                 id_proceso   = proceso.get("idProceso")
                 llave        = proceso.get("llaveProceso", str(numero))
@@ -220,10 +196,10 @@ def worker_task(numero, driver, results, actes, errors, lock):
                     continue
 
                 log.proceso(f"✓ {llave}: descargando actuaciones (idProceso={id_proceso})")
-                human_delay(0.3, 1.0)
+                human_delay(0.5, 1.5)
 
-                # ── 5. Consultar actuaciones ──────────────────────────────────
-                act_data = api_get_actuaciones(session, id_proceso)
+                # ── 4. Consultar actuaciones ──────────────────────────────────
+                act_data = api_get_actuaciones(driver, id_proceso)
                 if act_data is None:
                     log.advertencia(f"No se pudieron obtener actuaciones para {llave}")
                     continue
@@ -235,7 +211,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
                     or act_data.get("Actuaciones")
                     or []
                 )
-                log.debug(f"Total actuaciones recibidas: {len(actuaciones)}")
+                log.debug(f"Total actuaciones: {len(actuaciones)}")
 
                 encontradas = 0
                 for act in actuaciones:
