@@ -30,6 +30,9 @@ API_BASE = "https://consultaprocesos.ramajudicial.gov.co:448/api/v2"
 WEB_BASE = "https://consultaprocesos.ramajudicial.gov.co"
 WEB_URL  = f"{WEB_BASE}/Procesos/NumeroRadicacion"
 
+# Dominio esperado en driver.current_url para que CORS permita el fetch
+EXPECTED_DOMAIN = "consultaprocesos.ramajudicial.gov.co"
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,6 +48,7 @@ def save_debug_info(driver, numero, step_name):
         driver.save_screenshot(os.path.join(SCREENSHOT_DIR, f"{numero}_{step_name}_{timestamp}.png"))
         with open(os.path.join(HTML_DIR, f"{numero}_{step_name}_{timestamp}.html"), "w", encoding="utf-8") as f:
             f.write(driver.page_source)
+        log.debug(f"Debug guardado: {step_name}")
     except Exception as e:
         log.debug(f"Error guardando debug {step_name}: {e}")
 
@@ -62,12 +66,41 @@ def save_debug_response(data, nombre: str):
         log.debug(f"Error guardando response: {e}")
 
 
-def fetch_via_chrome(driver, url: str) -> dict | None:
+def ensure_on_site(driver) -> bool:
     """
-    Ejecuta un fetch() directamente dentro de Chrome usando JavaScript.
-    La request sale con el fingerprint TLS real del navegador y todas
-    sus cookies — el servidor no puede distinguirlo de un usuario real.
+    Verifica que Chrome esté en el dominio correcto.
+    Si no, navega a la página principal y espera que cargue.
+    Esto es crítico para que el fetch() no falle por CORS.
     """
+    current = driver.current_url
+    if EXPECTED_DOMAIN in current:
+        log.debug(f"Ya en dominio correcto: {current[:60]}")
+        return True
+
+    log.debug(f"Fuera del dominio ({current[:40]}...) — navegando...")
+    try:
+        driver.get(WEB_URL)
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.XPATH, "//input[@maxlength='23']"))
+        )
+        human_delay(2.0, 3.5)
+        log.debug(f"Ahora en: {driver.current_url[:60]}")
+        return True
+    except Exception as e:
+        log.error(f"Error navegando al sitio: {e}")
+        return False
+
+
+def fetch_api(driver, url: str) -> dict | None:
+    """
+    Ejecuta fetch() desde el contexto JavaScript de Chrome.
+    IMPORTANTE: Chrome debe estar en el dominio consultaprocesos.ramajudicial.gov.co
+    para que el servidor CORS permita la request al puerto 448.
+    """
+    # Garantizar que estamos en el dominio correcto antes de hacer el fetch
+    if not ensure_on_site(driver):
+        return None
+
     script = """
     const url = arguments[0];
     const callback = arguments[1];
@@ -86,48 +119,34 @@ def fetch_via_chrome(driver, url: str) -> dict | None:
         }
         return r.json();
     })
-    .then(data => callback({ok: true, data: data}))
+    .then(data => {
+        if (data !== undefined) callback({ok: true, data: data});
+    })
     .catch(e => callback({error: 0, message: e.toString()}));
     """
     try:
+        # Timeout generoso para el script async
+        driver.set_script_timeout(45)
         result = driver.execute_async_script(script, url)
         if result and result.get("ok"):
             return result["data"]
-        else:
-            log.error(f"fetch_via_chrome error: {result}")
-            return None
+        log.error(f"fetch_api error en {url}: {result}")
+        return None
     except Exception as e:
-        log.error(f"Error en fetch_via_chrome: {e}")
+        log.error(f"Error ejecutando fetch_api: {e}")
         return None
 
 
 def api_get_procesos(driver, numero: str, pagina: int = 1) -> dict | None:
     url = f"{API_BASE}/Procesos/Consulta/NumeroRadicacion?numero={numero}&SoloActivos=false&pagina={pagina}"
-    return fetch_via_chrome(driver, url)
+    log.debug(f"GET procesos: {numero}")
+    return fetch_api(driver, url)
 
 
 def api_get_actuaciones(driver, id_proceso: int, pagina: int = 1) -> dict | None:
     url = f"{API_BASE}/Proceso/Actuaciones/{id_proceso}?pagina={pagina}"
-    return fetch_via_chrome(driver, url)
-
-
-def warm_up_session(driver) -> bool:
-    """
-    Navega a la página principal para que Chrome establezca
-    cookies de sesión y el sitio reconozca la IP como válida.
-    """
-    try:
-        log.debug("Navegando a la página principal...")
-        driver.get(WEB_URL)
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@maxlength='23']"))
-        )
-        human_delay(2.0, 4.0)
-        log.debug("Sesión establecida")
-        return True
-    except Exception as e:
-        log.error(f"Error calentando sesión: {e}")
-        return False
+    log.debug(f"GET actuaciones: idProceso={id_proceso}")
+    return fetch_api(driver, url)
 
 
 # ── Task principal ────────────────────────────────────────────────────────────
@@ -135,10 +154,9 @@ def warm_up_session(driver) -> bool:
 def worker_task(numero, driver, results, actes, errors, lock):
     """
     Flujo:
-      1. Chrome navega a la página (warm-up de sesión, solo 1 vez)
-      2. fetch() desde JavaScript en el contexto del navegador llama a la API
-         → misma IP, mismo fingerprint TLS, mismas cookies → sin 403
-      3. Filtramos actuaciones dentro del período
+      1. Garantizar que Chrome esté en consultaprocesos.ramajudicial.gov.co
+      2. fetch() desde JS dentro del navegador → sin CORS, sin 403
+      3. Filtrar actuaciones dentro del período de búsqueda
     """
     idx = next(process_counter)
     total = TOTAL_PROCESSES or idx
@@ -155,20 +173,13 @@ def worker_task(numero, driver, results, actes, errors, lock):
         try:
             log.accion(f"Intento {attempt+1}/{max_retries}")
 
-            # ── 1. Warm-up solo en primer intento ────────────────────────────
-            if attempt == 0:
-                if not warm_up_session(driver):
-                    raise Exception("No se pudo establecer sesión en Chrome")
-                save_debug_info(driver, numero, f"01_warmed_a{attempt}")
-
-            # ── 2. Consultar procesos desde el contexto del navegador ─────────
-            log.debug(f"Consultando procesos para {numero}...")
+            # ── 1. Consultar procesos ─────────────────────────────────────────
+            # ensure_on_site() se llama dentro de fetch_api automáticamente
             data = api_get_procesos(driver, str(numero))
+            save_debug_info(driver, numero, f"01_after_fetch_a{attempt}")
 
             if data is None:
-                log.advertencia("Sin respuesta, renovando sesión...")
-                warm_up_session(driver)
-                raise Exception("API sin respuesta — reintentando")
+                raise Exception("API sin respuesta")
 
             save_debug_response(data, f"{numero}_procesos")
 
@@ -179,29 +190,27 @@ def worker_task(numero, driver, results, actes, errors, lock):
 
             log.proceso(f"Procesos encontrados: {len(procesos)}")
 
-            # ── 3. Revisar actuaciones por proceso ────────────────────────────
+            # ── 2. Revisar actuaciones por proceso ────────────────────────────
             for proceso in procesos:
                 id_proceso   = proceso.get("idProceso")
                 llave        = proceso.get("llaveProceso", str(numero))
                 fecha_ultima = proceso.get("fechaUltimaActuacion", "")
 
-                # Filtro rápido por fecha
                 try:
                     fecha_ultima_obj = datetime.fromisoformat(fecha_ultima).date()
                 except Exception:
                     fecha_ultima_obj = None
 
                 if fecha_ultima_obj and fecha_ultima_obj < cutoff:
-                    log.proceso(f"⏭️  {llave}: última actuación {fecha_ultima_obj} — fuera del período")
+                    log.proceso(f"⏭️  {llave}: {fecha_ultima_obj} — fuera del período")
                     continue
 
                 log.proceso(f"✓ {llave}: descargando actuaciones (idProceso={id_proceso})")
                 human_delay(0.5, 1.5)
 
-                # ── 4. Consultar actuaciones ──────────────────────────────────
                 act_data = api_get_actuaciones(driver, id_proceso)
                 if act_data is None:
-                    log.advertencia(f"No se pudieron obtener actuaciones para {llave}")
+                    log.advertencia(f"Sin actuaciones para {llave}")
                     continue
 
                 save_debug_response(act_data, f"{numero}_{id_proceso}_actuaciones")
@@ -218,12 +227,10 @@ def worker_task(numero, driver, results, actes, errors, lock):
                     act_fecha_str = act.get("fechaActuacion", "")
                     act_nombre    = act.get("actuacion", "").strip()
                     act_anotacion = act.get("anotacion", "").strip()
-
                     try:
                         act_fecha_obj = datetime.fromisoformat(act_fecha_str).date()
                     except Exception:
                         continue
-
                     if act_fecha_obj >= cutoff:
                         with lock:
                             actes.append((
@@ -236,7 +243,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
                         encontradas += 1
                         log.debug(f"✅ {act_fecha_obj}: {act_nombre[:60]}...")
 
-                log.exito(f"{llave}: {encontradas} actuaciones dentro del período")
+                log.exito(f"{llave}: {encontradas} actuaciones en el período")
 
             break  # Éxito
 
