@@ -13,17 +13,15 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
-# Importar nuestro logger primero
 from .logger import log
 
-# Configuración de directorios debug (se crean siempre, pero solo se usan si DEBUG_SCRAPER=True)
+# Directorios debug
 DEBUG_DIR = os.path.join(os.getcwd(), "debug")
 SCREENSHOT_DIR = os.path.join(DEBUG_DIR, "screenshots")
 HTML_DIR = os.path.join(DEBUG_DIR, "html")
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 os.makedirs(HTML_DIR, exist_ok=True)
 
-# --- IMPORTS DE TU PROYECTO ---
 from .config import (
     OUTPUT_DIR,
     NUM_THREADS,
@@ -36,29 +34,26 @@ from .config import (
     DIAS_BUSQUEDA
 )
 from .loader import cargar_procesos
-from .browser import new_chrome_driver, wait_for_tor_circuit
+from .browser import new_chrome_driver          # ← sin wait_for_tor_circuit
 from .worker import worker_task
 import scraper.worker as worker
 from .reporter import generar_pdf
 
 
-# ---------------- FUNCIONES ---------------- #
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def setup_environment():
-    """Configura entorno para evitar detección"""
     os.environ.pop('SE_DRIVER_PATH', None)
     os.environ.pop('SE_BINARY_PATH', None)
     display = os.environ.get('DISPLAY', ':99')
     os.environ['DISPLAY'] = display
-    log.debug(f"DISPLAY configurado: {display}")
-    log.debug(f"Entorno Python: {sys.version}")
+    log.debug(f"DISPLAY: {display}")
+    log.debug(f"Python: {sys.version}")
 
 
 def save_debug_page(driver, step_name="step", numero="unknown"):
-    """Guarda screenshot y HTML solo si DEBUG_SCRAPER está activado."""
     if not DEBUG_SCRAPER:
         return
-    from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     ss_path = os.path.join(SCREENSHOT_DIR, f"{numero}_{step_name}_{timestamp}.png")
     html_path = os.path.join(HTML_DIR, f"{numero}_{step_name}_{timestamp}.html")
@@ -66,75 +61,18 @@ def save_debug_page(driver, step_name="step", numero="unknown"):
         driver.save_screenshot(ss_path)
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(driver.page_source)
-        log.debug(f"Captura guardada: {step_name} para {numero}")
+        log.debug(f"Captura guardada: {step_name}")
     except Exception as e:
         log.error(f"Error guardando debug: {e}")
 
 
-def probar_procesos(lista_procesos):
-    """
-    Ejecuta worker_task para una lista de procesos (modo DEBUG).
-    """
-    import threading
-    log.titulo(f"MODO PRUEBA - {len(lista_procesos)} PROCESOS")
-
-    # ========== PASO 1: ESPERAR A QUE TOR ESTÉ LISTO (tiempo ilimitado) ==========
-    log.progreso("Verificando TOR (puede tardar varios minutos)...")
-    log.info("Esto es normal en la primera ejecución del día")
-
-    # Usamos el timeout por defecto de wait_for_tor_circuit (600s)
-    if not wait_for_tor_circuit():
-        log.error("❌ TOR no está listo. Abortando prueba.")
-        return
-
-    # ========== PASO 2: TOR LISTO, INICIAR DRIVER ==========
-    log.exito("TOR listo. Iniciando driver...")
-
-    results, actes, errors = [], [], []
-    lock = threading.Lock()
-    worker.process_counter = itertools.count(1)
-    worker.TOTAL_PROCESSES = len(lista_procesos)
-
-    driver = new_chrome_driver(0)
-
+def log_ip_salida():
     try:
-        log.progreso(f"Ejecutando {len(lista_procesos)} procesos...")
-
-        for i, numero in enumerate(lista_procesos, 1):
-            log.separador()
-            log.progreso(f"[{i}/{len(lista_procesos)}] {numero}")
-
-            try:
-                save_debug_page(driver, f"inicio_{i}", numero)
-                worker_task(numero, driver, results, actes, errors, lock)
-                save_debug_page(driver, f"fin_{i}", numero)
-                log.exito(f"Proceso {i} completado")
-            except Exception as e:
-                log.error(f"Error en proceso {i}: {e}")
-                save_debug_page(driver, f"error_{i}", numero)
-
-            time.sleep(2)
-
-        log.titulo("RESULTADOS FINALES")
-        log.resultado(f"Total procesos: {len(lista_procesos)}")
-        log.resultado(f"Actuaciones encontradas: {len(actes)}")
-        log.resultado(f"Errores: {len(errors)}")
-
-        if actes:
-            log.progreso("Primeras 10 actuaciones:")
-            for i, act in enumerate(actes[:10], 1):
-                log.proceso(f"  {i}. {act[1]} - {act[2][:80]}...")
-
-        if errors:
-            log.advertencia("Procesos con error:")
-            for num, msg in errors:
-                log.advertencia(f"  • {num}: {msg[:100]}")
-
+        import requests
+        ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
+        log.info(f"IP de salida: {ip}")
     except Exception as e:
-        log.error(f"Error general en prueba: {e}")
-    finally:
-        driver.quit()
-        log.exito("Driver cerrado")
+        log.debug(f"No se pudo obtener IP: {e}")
 
 
 def exportar_csv(actes, start_ts):
@@ -173,29 +111,70 @@ def send_report_email():
         log.error(f"Error enviando correo: {e}")
 
 
+# ── Modos de ejecución ────────────────────────────────────────────────────────
+
+def probar_procesos(lista_procesos):
+    """Ejecuta el scraper en modo prueba/debug."""
+    log.titulo(f"MODO PRUEBA — {len(lista_procesos)} PROCESOS")
+
+    results, actes, errors = [], [], []
+    lock = threading.Lock()
+    worker.process_counter = itertools.count(1)
+    worker.TOTAL_PROCESSES = len(lista_procesos)
+
+    driver = new_chrome_driver(0)
+
+    try:
+        for i, numero in enumerate(lista_procesos, 1):
+            log.separador()
+            log.progreso(f"[{i}/{len(lista_procesos)}] {numero}")
+            try:
+                save_debug_page(driver, f"inicio_{i}", numero)
+                worker_task(numero, driver, results, actes, errors, lock)
+                save_debug_page(driver, f"fin_{i}", numero)
+                log.exito(f"Proceso {i} completado")
+            except Exception as e:
+                log.error(f"Error en proceso {i}: {e}")
+                save_debug_page(driver, f"error_{i}", numero)
+            time.sleep(2)
+
+        log.titulo("RESULTADOS")
+        log.resultado(f"Procesos:     {len(lista_procesos)}")
+        log.resultado(f"Actuaciones:  {len(actes)}")
+        log.resultado(f"Errores:      {len(errors)}")
+
+        if actes:
+            log.progreso("Primeras 10 actuaciones:")
+            for i, act in enumerate(actes[:10], 1):
+                log.proceso(f"  {i}. {act[1]} — {act[2][:80]}...")
+
+        if errors:
+            log.advertencia("Procesos con error:")
+            for num, msg in errors:
+                log.advertencia(f"  • {num}: {msg[:100]}")
+
+    except Exception as e:
+        log.error(f"Error general en prueba: {e}")
+    finally:
+        driver.quit()
+        log.exito("Driver cerrado")
+
+
 def ejecutar_ciclo():
     """Ejecuta un ciclo completo de scraping (producción)."""
     log.titulo("INICIANDO CICLO DE SCRAPING")
-    log.resultado(f"📅 Fecha: {datetime.now().strftime('%d/%m/%Y')}")
+    log.resultado(f"📅 Fecha:   {datetime.now().strftime('%d/%m/%Y')}")
     log.resultado(f"🎯 Período: últimos {DIAS_BUSQUEDA} días")
-    log.resultado(f"🔄 Hilos: {NUM_THREADS}")
+    log.resultado(f"🔄 Hilos:   {NUM_THREADS}")
     log.separador()
-
-    # Verificar TOR antes de crear los drivers (por si es el primer inicio del día)
-    log.progreso("Verificando TOR antes del ciclo...")
-    if not wait_for_tor_circuit():
-        log.error("❌ TOR no está listo. Cancelando ciclo.")
-        return
 
     start_ts = time.time()
     worker.process_counter = itertools.count(1)
 
-    # Limpiar archivos antiguos
-    if os.path.exists(PDF_PATH):
-        os.remove(PDF_PATH)
-    csv_old = os.path.join(OUTPUT_DIR, "actuaciones.csv")
-    if os.path.exists(csv_old):
-        os.remove(csv_old)
+    # Limpiar archivos anteriores
+    for path in [PDF_PATH, os.path.join(OUTPUT_DIR, "actuaciones.csv")]:
+        if os.path.exists(path):
+            os.remove(path)
 
     procesos = cargar_procesos()
     TOTAL = len(procesos)
@@ -206,7 +185,7 @@ def ejecutar_ciclo():
     for num in procesos:
         q.put(num)
     for _ in range(NUM_THREADS):
-        q.put(None)
+        q.put(None)  # señal de fin por hilo
 
     drivers = [new_chrome_driver(i) for i in range(NUM_THREADS)]
     results, actes, errors = [], [], []
@@ -224,7 +203,7 @@ def ejecutar_ciclo():
                     worker_task(numero, driver, results, actes, errors, lock)
                     break
                 except Exception as exc:
-                    log.advertencia(f"{numero}: intento {intento + 1}/10 fallido")
+                    log.advertencia(f"{numero}: intento {intento+1}/10 fallido — {exc}")
                     if intento == 9:
                         with lock:
                             errors.append((numero, str(exc)[:200]))
@@ -249,41 +228,30 @@ def ejecutar_ciclo():
             log.error(f"Error enviando correo: {e}")
 
     err = len(errors)
-    esc = TOTAL - err
     log.titulo("RESUMEN DEL CICLO")
-    log.resultado(f"✅ Escaneados: {esc}")
-    log.resultado(f"❌ Errores: {err}")
+    log.resultado(f"✅ Escaneados:  {TOTAL - err}")
+    log.resultado(f"❌ Errores:     {err}")
     log.resultado(f"📋 Actuaciones: {len(actes)}")
     if err and DEBUG_SCRAPER:
-        log.advertencia("Procesos con error:")
+        log.advertencia("Primeros errores:")
         for num, msg in errors[:5]:
             log.advertencia(f"  • {num}: {msg[:100]}")
     log.separador()
 
 
-def log_ip_salida():
-    try:
-        import requests
-        ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
-        log.info(f"IP Saliente: {ip}")
-    except Exception as e:
-        log.debug(f"No se pudo obtener IP de salida: {e}")
-
-
-# ---------------- MAIN ---------------- #
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
     log.titulo("SCRAPER RAMA JUDICIAL")
     log.resultado(f"🌍 Entorno: {ENV}")
-    log.resultado(f"🔧 Debug: {'ACTIVADO' if DEBUG_SCRAPER else 'DESACTIVADO'}")
-    log.resultado(f"📅 Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    log.resultado(f"🔧 Debug:   {'ACTIVADO' if DEBUG_SCRAPER else 'DESACTIVADO'}")
+    log.resultado(f"📅 Fecha:   {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     log.separador()
 
     setup_environment()
     log_ip_salida()
 
     if DEBUG_SCRAPER:
-        # Modo prueba: lista de procesos
         procesos_prueba = [
             "08296408900120190029100",
             "11001310300120080020700",
@@ -293,7 +261,6 @@ def main():
         ]
         probar_procesos(procesos_prueba)
     else:
-        # Modo producción - scheduler
         log.progreso(f"Scheduler iniciado. Próxima ejecución: {SCHEDULE_TIME}")
         bogota_tz = ZoneInfo("America/Bogota")
         hh, mm = map(int, SCHEDULE_TIME.split(":"))
@@ -303,20 +270,20 @@ def main():
             target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
             if now >= target:
                 target += timedelta(days=1)
-            wait_sec = (target - now).total_seconds()
 
+            wait_sec = (target - now).total_seconds()
             remaining = wait_sec
+
             while remaining > 0:
                 if remaining > 3600:
                     hrs = int(remaining // 3600)
-                    log.progreso(f"Faltan {hrs} hora(s) para próxima ejecución")
+                    log.progreso(f"Próxima ejecución en {hrs} hora(s)")
                     time.sleep(3600)
                     remaining -= 3600
                 else:
                     mins = int(remaining // 60)
                     secs = int(remaining % 60)
-                    if mins > 0 or secs > 0:
-                        log.progreso(f"Faltan {mins} min {secs} seg")
+                    log.progreso(f"Próxima ejecución en {mins}m {secs}s")
                     time.sleep(remaining)
                     remaining = 0
 
