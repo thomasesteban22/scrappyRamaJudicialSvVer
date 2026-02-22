@@ -3,89 +3,110 @@ import time
 import random
 import itertools
 import os
-import requests as req_lib
+import requests
 from datetime import date, timedelta, datetime
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
 
 from .config import DIAS_BUSQUEDA, DEBUG_SCRAPER
-from .browser import handle_modal_error
 from .logger import log
 
 # ── Directorios de debug ──────────────────────────────────────────────────────
 DEBUG_DIR = os.path.join(os.getcwd(), "debug")
-SCREENSHOT_DIR = os.path.join(DEBUG_DIR, "screenshots")
-HTML_DIR = os.path.join(DEBUG_DIR, "html")
+RESPONSE_DIR = os.path.join(DEBUG_DIR, "responses")
 if DEBUG_SCRAPER:
-    os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-    os.makedirs(HTML_DIR, exist_ok=True)
+    os.makedirs(RESPONSE_DIR, exist_ok=True)
 
 process_counter = itertools.count(1)
 TOTAL_PROCESSES = 0
 
+# ── Configuración de la API ───────────────────────────────────────────────────
+API_BASE   = "https://consultaprocesos.ramajudicial.gov.co:448/api/v2"
+WEB_BASE   = "https://consultaprocesos.ramajudicial.gov.co"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+HEADERS = {
+    "Accept":              "application/json, text/plain, */*",
+    "Accept-Language":     "es-CO,es;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding":     "gzip, deflate, br",
+    "Origin":              WEB_BASE,
+    "Referer":             f"{WEB_BASE}/",
+    "Sec-Fetch-Dest":      "empty",
+    "Sec-Fetch-Mode":      "cors",
+    "Sec-Fetch-Site":      "same-site",
+    "User-Agent":          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+}
 
-def save_debug_info(driver, numero, step_name):
-    """Guarda screenshot y HTML solo si DEBUG_SCRAPER está activado."""
+
+# ── API calls ─────────────────────────────────────────────────────────────────
+
+def api_get_procesos(numero: str, pagina: int = 1) -> dict | None:
+    """
+    GET /api/v2/Procesos/Consulta/NumeroRadicacion
+        ?numero=<NUM>&SoloActivos=false&pagina=1
+    """
+    url = f"{API_BASE}/Procesos/Consulta/NumeroRadicacion"
+    params = {
+        "numero":      numero,
+        "SoloActivos": "false",
+        "pagina":      pagina,
+    }
+    try:
+        r = requests.get(url, params=params, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        log.error(f"Error consultando procesos para {numero}: {e}")
+        return None
+
+
+def api_get_actuaciones(id_proceso: int, pagina: int = 1) -> dict | None:
+    """
+    GET /api/v2/Proceso/Actuaciones/<idProceso>?pagina=1
+    Confirmado en DevTools: /api/v2/Proceso/Actuaciones/28775804?pagina=1
+    """
+    url = f"{API_BASE}/Proceso/Actuaciones/{id_proceso}"
+    params = {"pagina": pagina}
+    try:
+        r = requests.get(url, params=params, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        log.error(f"Error consultando actuaciones para idProceso {id_proceso}: {e}")
+        return None
+
+
+def save_debug_response(data: dict, nombre: str):
+    """Guarda la respuesta JSON si DEBUG_SCRAPER está activo."""
     if not DEBUG_SCRAPER:
         return
+    import json
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    ss_path = os.path.join(SCREENSHOT_DIR, f"{numero}_{step_name}_{timestamp}.png")
-    html_path = os.path.join(HTML_DIR, f"{numero}_{step_name}_{timestamp}.html")
+    path = os.path.join(RESPONSE_DIR, f"{nombre}_{timestamp}.json")
     try:
-        driver.save_screenshot(ss_path)
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        log.debug(f"Screenshot guardado: {step_name}")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        log.debug(f"Response guardada: {nombre}")
     except Exception as e:
-        log.error(f"Error guardando debug {step_name}: {e}")
+        log.error(f"Error guardando response debug: {e}")
 
 
-def human_delay(min_s=1.0, max_s=3.5):
-    """Pausa aleatoria para simular comportamiento humano."""
+def human_delay(min_s: float = 0.5, max_s: float = 2.0):
+    """Pausa aleatoria para no saturar el servidor."""
     time.sleep(random.uniform(min_s, max_s))
-
-
-def wait_for_results(driver, timeout=60):
-    """
-    Espera a que la página cargue resultados o muestre modal.
-    Retorna: 'success', 'no_results', 'modal', 'timeout'
-    """
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        try:
-            # Modal activo (bloqueo / error del sitio)
-            modals = driver.find_elements(By.XPATH, "//div[contains(@class, 'v-dialog--active')]")
-            if modals:
-                return 'modal'
-
-            # Tablas de resultados
-            tables = driver.find_elements(By.XPATH, "//table")
-            for table in tables:
-                rows = table.find_elements(By.XPATH, ".//tbody//tr")
-                if rows:
-                    return 'success'
-
-            # Mensaje de sin resultados
-            no_results = driver.find_elements(By.XPATH,
-                "//*[contains(text(), 'No se encontraron') or contains(text(), 'Sin resultados')]")
-            if no_results:
-                return 'no_results'
-
-        except Exception as e:
-            log.debug(f"Error en wait_for_results: {e}")
-
-        time.sleep(2)
-
-    return 'timeout'
 
 
 # ── Task principal ────────────────────────────────────────────────────────────
 
 def worker_task(numero, driver, results, actes, errors, lock):
+    """
+    Consulta un proceso judicial vía API REST directamente.
+    El parámetro `driver` se mantiene por compatibilidad con main.py
+    pero ya no se usa — Selenium ya no es necesario.
+
+    Flujo equivalente al manual:
+      1. GET procesos  → tabla con lista de procesos
+      2. Filtro por fechaUltimaActuacion >= cutoff
+      3. GET actuaciones/{idProceso} → tabla de actuaciones
+      4. Filtro actuaciones dentro del período
+    """
     idx = next(process_counter)
     total = TOTAL_PROCESSES or idx
 
@@ -100,157 +121,97 @@ def worker_task(numero, driver, results, actes, errors, lock):
     for attempt in range(max_retries):
         try:
             log.accion(f"Intento {attempt+1}/{max_retries}")
-
-            # ── Cargar página ─────────────────────────────────────────────────
-            driver.get("https://consultaprocesos.ramajudicial.gov.co/Procesos/NumeroRadicacion")
-            human_delay(3, 6)
-            save_debug_info(driver, numero, f"01_pagina_cargada_a{attempt}")
-
-            # ── Ingresar número ───────────────────────────────────────────────
-            input_field = WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located((By.XPATH, "//input[@maxlength='23']"))
-            )
-            input_field.clear()
-            human_delay(0.3, 0.8)
-            for char in str(numero):
-                input_field.send_keys(char)
-                time.sleep(random.uniform(0.08, 0.18))
-            log.debug(f"Número ingresado: {numero}")
-
-            try:
-                counter = driver.find_element(By.XPATH, "//div[contains(@class, 'v-counter')]")
-                log.debug(f"Contador: {counter.text}")
-            except Exception:
-                pass
-
-            save_debug_info(driver, numero, f"02_numero_ingresado_a{attempt}")
-            human_delay(1, 2)
-
-            # ── Radio "Todos los Procesos" ─────────────────────────────────────
-            try:
-                radios = driver.find_elements(By.XPATH, "//div[contains(@class, 'v-radio')]//label")
-                for r in radios:
-                    if "Todos los Procesos" in r.text:
-                        log.accion("Seleccionando: Todos los Procesos")
-                        r.click()
-                        human_delay(0.5, 1.2)
-                        break
-            except Exception as e:
-                log.debug(f"No se pudo seleccionar radio: {e}")
-
-            # ── Click en Consultar ─────────────────────────────────────────────
-            consultar_btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[.//span[contains(text(), 'Consultar')]]"))
-            )
             human_delay(0.5, 1.5)
-            driver.execute_script("arguments[0].click();", consultar_btn)
-            log.accion("Consultando...")
 
-            # ── Esperar resultados ─────────────────────────────────────────────
-            result_status = wait_for_results(driver, timeout=45)
-            save_debug_info(driver, numero, f"03_despues_consultar_a{attempt}")
+            # ── 1. Consultar lista de procesos ────────────────────────────────
+            data = api_get_procesos(str(numero))
+            if data is None:
+                raise Exception("Sin respuesta de la API de procesos")
 
-            # ── Procesar resultado ─────────────────────────────────────────────
-            if result_status == 'success':
-                log.proceso("Resultados encontrados")
-                tables = driver.find_elements(By.XPATH, "//table")
-                for table in tables:
-                    rows = table.find_elements(By.XPATH, ".//tbody//tr")
-                    if not rows:
-                        continue
+            save_debug_response(data, f"{numero}_procesos")
 
-                    log.debug(f"Tabla con {len(rows)} filas")
-                    save_debug_info(driver, numero, f"04_tabla_resultados_a{attempt}")
-
-                    cells = rows[0].find_elements(By.TAG_NAME, "td")
-                    if len(cells) >= 3:
-                        try:
-                            fecha_btn = cells[2].find_element(By.TAG_NAME, "button")
-                            fecha_text = fecha_btn.text.strip()
-                            log.proceso(f"Última actuación: {fecha_text}")
-                            fecha_obj = datetime.strptime(fecha_text, "%Y-%m-%d").date()
-
-                            if fecha_obj >= cutoff:
-                                log.exito("✓ DENTRO del período")
-                                driver.execute_script("arguments[0].click();", fecha_btn)
-                                human_delay(6, 10)
-                                save_debug_info(driver, numero, f"05_click_fecha_a{attempt}")
-
-                                # Extraer actuaciones del detalle
-                                act_tables = driver.find_elements(By.XPATH, "//table")
-                                for act_table in act_tables:
-                                    act_rows = act_table.find_elements(By.XPATH, ".//tbody//tr")
-                                    if len(act_rows) <= 1:
-                                        continue
-
-                                    log.proceso(f"Extrayendo {len(act_rows)-1} actuaciones...")
-                                    for row in act_rows[1:]:
-                                        act_cells = row.find_elements(By.TAG_NAME, "td")
-                                        if len(act_cells) < 3:
-                                            continue
-                                        act_fecha = act_cells[0].text.strip()
-                                        act_nombre = act_cells[1].text.strip()
-                                        act_anotacion = act_cells[2].text.strip()
-                                        try:
-                                            act_fecha_obj = datetime.strptime(act_fecha, "%Y-%m-%d").date()
-                                            if act_fecha_obj >= cutoff:
-                                                with lock:
-                                                    actes.append((
-                                                        numero,
-                                                        act_fecha,
-                                                        act_nombre,
-                                                        act_anotacion,
-                                                        driver.current_url
-                                                    ))
-                                                log.debug(f"✅ {act_fecha}: {act_nombre[:50]}...")
-                                        except Exception:
-                                            continue
-                                    break
-
-                                driver.back()
-                                human_delay(4, 7)
-                            else:
-                                log.proceso("⏭️ Fuera del período, se omite")
-
-                        except Exception as e:
-                            log.debug(f"No se pudo extraer fecha: {e}")
-                    break  # Solo procesa la primera tabla con filas
-
-                break  # Éxito → salir del bucle de reintentos
-
-            elif result_status == 'no_results':
+            procesos = data.get("procesos", [])
+            if not procesos:
                 log.proceso("Sin resultados para este número")
                 break
 
-            elif result_status == 'modal':
-                log.advertencia(f"Modal detectado en intento {attempt+1}")
-                save_debug_info(driver, numero, f"modal_a{attempt}")
-                handle_modal_error(driver, numero)
-                # Espera progresiva antes de reintentar
-                wait_time = 5 * (attempt + 1)
-                log.info(f"Esperando {wait_time}s antes de reintentar...")
-                time.sleep(wait_time)
-                continue
+            log.proceso(f"Procesos encontrados: {len(procesos)}")
 
-            elif result_status == 'timeout':
-                log.advertencia(f"Timeout en intento {attempt+1}")
-                if attempt == max_retries - 1:
-                    raise Exception("Timeout persistente después de todos los reintentos")
-                wait_time = 10 * (attempt + 1)
-                log.info(f"Esperando {wait_time}s antes de reintentar...")
-                time.sleep(wait_time)
-                continue
+            # ── 2. Iterar procesos y revisar actuaciones ──────────────────────
+            for proceso in procesos:
+                id_proceso   = proceso.get("idProceso")
+                llave        = proceso.get("llaveProceso", str(numero))
+                fecha_ultima = proceso.get("fechaUltimaActuacion", "")
+
+                # Filtro rápido: si la última actuación ya está fuera del
+                # período, no tiene sentido descargar el detalle
+                try:
+                    fecha_ultima_obj = datetime.fromisoformat(fecha_ultima).date()
+                except Exception:
+                    fecha_ultima_obj = None
+
+                if fecha_ultima_obj and fecha_ultima_obj < cutoff:
+                    log.proceso(f"⏭️  {llave}: última actuación {fecha_ultima_obj} — fuera del período")
+                    continue
+
+                log.proceso(f"✓ {llave}: descargando actuaciones (idProceso={id_proceso})")
+                human_delay(0.3, 1.0)
+
+                # ── 3. Consultar actuaciones del proceso ──────────────────────
+                act_data = api_get_actuaciones(id_proceso)
+                if act_data is None:
+                    log.advertencia(f"No se pudieron obtener actuaciones para {llave}")
+                    continue
+
+                save_debug_response(act_data, f"{numero}_{id_proceso}_actuaciones")
+
+                # La API puede devolver la lista bajo distintas claves
+                # según la versión — intentamos las más comunes
+                actuaciones = (
+                    act_data.get("actuaciones")
+                    or act_data.get("Actuaciones")
+                    or []
+                )
+                log.debug(f"Total actuaciones recibidas: {len(actuaciones)}")
+
+                encontradas = 0
+                for act in actuaciones:
+                    act_fecha_str = act.get("fechaActuacion", "")
+                    act_nombre    = act.get("actuacion", "").strip()
+                    act_anotacion = act.get("anotacion", "").strip()
+
+                    try:
+                        act_fecha_obj = datetime.fromisoformat(act_fecha_str).date()
+                    except Exception:
+                        continue
+
+                    if act_fecha_obj >= cutoff:
+                        with lock:
+                            actes.append((
+                                numero,
+                                act_fecha_obj.isoformat(),
+                                act_nombre,
+                                act_anotacion,
+                                f"{API_BASE}/Proceso/Actuaciones/{id_proceso}"
+                            ))
+                        encontradas += 1
+                        log.debug(f"✅ {act_fecha_obj}: {act_nombre[:60]}...")
+
+                log.exito(f"{llave}: {encontradas} actuaciones dentro del período")
+
+            break  # Éxito → salir del bucle de reintentos
 
         except Exception as e:
             log.error(f"Error en intento {attempt+1}: {e}")
             if attempt == max_retries - 1:
-                raise
+                with lock:
+                    errors.append((numero, str(e)[:200]))
+                log.error(f"❌ {numero} fallido tras {max_retries} intentos")
+                return
             wait_time = 8 * (attempt + 1)
             log.info(f"Esperando {wait_time}s antes de reintentar...")
             time.sleep(wait_time)
-            continue
 
     with lock:
-        results.append((numero, driver.current_url))
+        results.append((numero, f"{API_BASE}/Procesos/Consulta/NumeroRadicacion"))
     log.exito("Proceso completado")
-    save_debug_info(driver, numero, "99_completado")
