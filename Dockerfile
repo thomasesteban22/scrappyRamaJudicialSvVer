@@ -21,16 +21,3 @@ RUN mkdir -p /app/debug/screenshots /app/debug/html \
 COPY . .
 
 CMD ["python", "-m", "scraper.main"]
-```
-
----
-
-**`requirements.txt`** — elimina las líneas de Chrome, queda así:
-```
-requests>=2.31.0
-selenium>=4.15.0
-python-dotenv>=1.0.0
-openpyxl>=3.1.2
-reportlab>=4.0.0
-pytz>=2024.1
-schedule>=1.2.0
