@@ -1,0 +1,17 @@
+# Ver logs en tiempo real
+docker logs -f scraper-rama
+
+# Ver si está corriendo
+docker ps
+
+# Reiniciar manualmente
+docker restart scraper-rama
+
+# Actualizar código
+cd /app2 && git pull
+docker build -t scraper-rama2 /app2
+docker stop scraper-rama && docker rm scraper-rama
+docker run -d --name scraper-rama --restart unless-stopped \
+  --env-file /app2/.env -e DEBUG_SCRAPER=0 \
+  -v /app2/data:/app/data -v /app2/output:/app/output \
+  scraper-rama2
