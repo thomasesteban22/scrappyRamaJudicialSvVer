@@ -48,11 +48,11 @@ def worker_task(numero, driver, results, actes, errors, lock):
     cutoff = date.today() - timedelta(days=DIAS_BUSQUEDA)
     log.debug(f"Fecha corte: {cutoff}")
 
-    max_retries = 3
+    max_retries = 10
     for attempt in range(max_retries):
         try:
             log.accion(f"Intento {attempt+1}/{max_retries}")
-            human_delay(0.5, 1.5)
+            human_delay(2.0, 4.0)
 
             # ── Consultar procesos ────────────────────────────────────────────
             data = api_get_procesos(str(numero))
@@ -84,7 +84,7 @@ def worker_task(numero, driver, results, actes, errors, lock):
                     continue
 
                 log.proceso(f"✓ {llave}: actuaciones (idProceso={id_proceso})")
-                human_delay(0.3, 1.0)
+                human_delay(1.0, 2.0)
 
                 # ── Consultar actuaciones ─────────────────────────────────────
                 act_data = api_get_actuaciones(id_proceso)
@@ -105,13 +105,25 @@ def worker_task(numero, driver, results, actes, errors, lock):
                     except Exception:
                         continue
                     if act_fecha_obj >= cutoff:
+                        # fechaInicial = "Fecha Inicia Término" del sitio
+                        # Si tiene valor ISO, extraer solo la fecha; si es null, usar ""
+                        fecha_inicial_raw = act.get("fechaInicial")
+                        if fecha_inicial_raw:
+                            try:
+                                fecha_inicial = datetime.fromisoformat(fecha_inicial_raw).date().isoformat()
+                            except Exception:
+                                fecha_inicial = ""
+                        else:
+                            fecha_inicial = ""
+
                         with lock:
                             actes.append((
                                 numero,
                                 act_fecha_obj.isoformat(),
-                                act.get("actuacion", "").strip(),
-                                act.get("anotacion", "").strip(),
-                                f"idProceso:{id_proceso}"
+                                (act.get("actuacion") or "").strip(),
+                                (act.get("anotacion") or "").strip(),
+                                f"idProceso:{id_proceso}",
+                                fecha_inicial
                             ))
                         encontradas += 1
 

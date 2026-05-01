@@ -84,7 +84,7 @@ def generar_pdf(total_procesos, actes, errors, start_ts, end_ts):
 
     # Agrupo actuaciones por proceso
     por_proceso = defaultdict(list)
-    for num, fecha, actu, anota, url in actes:
+    for num, fecha, actu, anota, url, _fecha_inicial in actes:
         por_proceso[num].append((fecha, actu, anota))
 
     con_actos = len(por_proceso)

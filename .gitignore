@@ -1,5 +1,40 @@
+# Python
 .venv/
 *.pyc
 __pycache__/
+
+# Variables de entorno (NUNCA commitear)
 .env
-tmp_profiles
+.env.local
+.env.production
+
+# Perfiles y caches del scraper
+tmp_profiles/
+debug/
+
+# Outputs generados
+output/*.csv
+output/*.pdf
+output/*.xlsx
+
+# Datos temporales
+data/*.xlsm
+data/*.xlsx
+
+# Logs
+*.log
+logs/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups
+*.bak
+*.backup

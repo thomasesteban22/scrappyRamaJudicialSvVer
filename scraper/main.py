@@ -24,6 +24,20 @@ from .worker import worker_task
 from .session_manager import get_session
 import scraper.worker as worker
 from .reporter import generar_pdf
+from .api_client import enviar_actuaciones
+from . import magna_client
+
+
+# ─── Config helpers ────────────────────────────────────────────────────
+def get_runtime_config() -> dict:
+    """Lee la config actual desde Magna; cae a valores del .env si falla."""
+    cfg = magna_client.get_config()
+    return {
+        "dias_busqueda": int(cfg.get("dias_busqueda") or DIAS_BUSQUEDA),
+        "schedule_time": cfg.get("schedule_time") or SCHEDULE_TIME,
+        "num_threads":   int(cfg.get("num_threads") or NUM_THREADS),
+        "activo":        bool(cfg.get("activo", 1)),
+    }
 
 
 def setup_environment():
@@ -47,7 +61,7 @@ def exportar_csv(actes, start_ts):
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
-        for numero, fecha, actu, anota, _url in actes:
+        for numero, fecha, actu, anota, _url, _fecha_inicial in actes:
             writer.writerow([numero, "Sistema", fecha_registro, fecha, "", actu, anota])
     log.resultado(f"CSV generado: {csv_path}")
 
@@ -56,7 +70,8 @@ def send_report_email():
     now = datetime.now()
     fecha_str = now.strftime("%A %d-%m-%Y a las %I:%M %p").capitalize()
     try:
-        smtp = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        smtp = smtplib.SMTP("smtp.gmail.com", 587)
+        smtp.starttls()
         smtp.login(EMAIL_USER, EMAIL_PASS)
         msg = MIMEMultipart()
         msg["Subject"] = f"Reporte Diario de Actuaciones - {fecha_str}"
@@ -79,46 +94,28 @@ def send_report_email():
         log.error(f"Error enviando correo: {e}")
 
 
-def probar_procesos(lista_procesos):
-    log.titulo(f"MODO PRUEBA — {len(lista_procesos)} PROCESOS")
-    results, actes, errors = [], [], []
-    lock = threading.Lock()
-    worker.process_counter = itertools.count(1)
-    worker.TOTAL_PROCESSES = len(lista_procesos)
+# ─── Ejecución del ciclo ──────────────────────────────────────────────
+def ejecutar_ciclo(tipo: str = "automatica", iniciado_por: str = "scheduler"):
+    cfg = get_runtime_config()
+    dias_busqueda = cfg["dias_busqueda"]
+    num_threads   = cfg["num_threads"]
 
-    log.progreso("Obteniendo sesión via Bright Data...")
-    get_session()
+    # Crear ejecución en Magna
+    ejec_id = magna_client.crear_ejecucion(tipo=tipo, iniciado_por=iniciado_por)
+    if ejec_id:
+        log.progreso(f"Ejecución #{ejec_id} registrada en Magna ({tipo}, por {iniciado_por})")
 
-    for i, numero in enumerate(lista_procesos, 1):
-        log.separador()
-        try:
-            worker_task(numero, None, results, actes, errors, lock)
-            log.exito(f"Proceso {i} completado")
-        except Exception as e:
-            log.error(f"Error en proceso {i}: {e}")
-        time.sleep(1)
-
-    log.titulo("RESULTADOS")
-    log.resultado(f"Procesos:     {len(lista_procesos)}")
-    log.resultado(f"Actuaciones:  {len(actes)}")
-    log.resultado(f"Errores:      {len(errors)}")
-    if actes:
-        for i, act in enumerate(actes[:10], 1):
-            log.proceso(f"  {i}. {act[1]} — {act[2][:80]}...")
-    if errors:
-        for num, msg in errors:
-            log.advertencia(f"  • {num}: {msg[:100]}")
-
-
-def ejecutar_ciclo():
     log.titulo("INICIANDO CICLO DE SCRAPING")
     log.resultado(f"📅 Fecha:   {datetime.now().strftime('%d/%m/%Y')}")
-    log.resultado(f"🎯 Período: últimos {DIAS_BUSQUEDA} días")
-    log.resultado(f"🔄 Hilos:   {NUM_THREADS}")
+    log.resultado(f"🎯 Período: últimos {dias_busqueda} días")
+    log.resultado(f"🔄 Hilos:   {num_threads}")
     log.separador()
 
     start_ts = time.time()
     worker.process_counter = itertools.count(1)
+
+    # Pasar dias_busqueda al worker via env (lo lee config.py)
+    os.environ["DIAS_BUSQUEDA"] = str(dias_busqueda)
 
     for path in [PDF_PATH, os.path.join(OUTPUT_DIR, "actuaciones.csv")]:
         if os.path.exists(path):
@@ -129,14 +126,23 @@ def ejecutar_ciclo():
     worker.TOTAL_PROCESSES = TOTAL
     log.progreso(f"Procesos a escanear: {TOTAL}")
 
-    log.progreso("Obteniendo sesión via Bright Data...")
+    if TOTAL == 0:
+        log.advertencia("Sin procesos para escanear, abortando")
+        magna_client.actualizar_ejecucion(
+            ejec_id, estado="completada",
+            procesos_total=0, procesos_exitosos=0, procesos_error=0,
+            actuaciones_encontradas=0, actuaciones_insertadas=0, actuaciones_duplicadas=0,
+        )
+        return
+
+    log.progreso("Obteniendo sesión...")
     get_session()
     log.exito("Sesión lista — iniciando threads")
 
     q = Queue()
     for num in procesos:
         q.put(num)
-    for _ in range(NUM_THREADS):
+    for _ in range(num_threads):
         q.put(None)
 
     results, actes, errors = [], [], []
@@ -159,7 +165,7 @@ def ejecutar_ciclo():
                             errors.append((numero, str(exc)[:200]))
 
     threads = []
-    for _ in range(NUM_THREADS):
+    for _ in range(num_threads):
         t = threading.Thread(target=loop, daemon=True)
         t.start()
         threads.append(t)
@@ -169,6 +175,12 @@ def ejecutar_ciclo():
         t.join()
 
     generar_pdf(TOTAL, actes, errors, start_ts, time.time())
+
+    # Enviar a Magna y capturar resultado
+    resultado_envio = enviar_actuaciones(actes) or {}
+    insertadas = resultado_envio.get("insertadas", 0)
+    duplicadas = resultado_envio.get("duplicadas", 0)
+
     exportar_csv(actes, start_ts)
 
     if ENV == 'production':
@@ -181,9 +193,69 @@ def ejecutar_ciclo():
     log.resultado(f"✅ Escaneados:  {TOTAL - len(errors)}")
     log.resultado(f"❌ Errores:     {len(errors)}")
     log.resultado(f"📋 Actuaciones: {len(actes)}")
+    log.resultado(f"💾 Insertadas:  {insertadas}")
+    log.resultado(f"♻️  Duplicadas:  {duplicadas}")
     log.separador()
 
+    # Cerrar ejecución en Magna
+    magna_client.actualizar_ejecucion(
+        ejec_id,
+        estado="completada",
+        procesos_total=TOTAL,
+        procesos_exitosos=TOTAL - len(errors),
+        procesos_error=len(errors),
+        actuaciones_encontradas=len(actes),
+        actuaciones_insertadas=insertadas,
+        actuaciones_duplicadas=duplicadas,
+    )
 
+
+def probar_procesos(lista_procesos):
+    log.titulo(f"MODO PRUEBA — {len(lista_procesos)} PROCESOS")
+    results, actes, errors = [], [], []
+    lock = threading.Lock()
+    worker.process_counter = itertools.count(1)
+    worker.TOTAL_PROCESSES = len(lista_procesos)
+
+    log.progreso("Obteniendo sesión...")
+    get_session()
+
+    for i, numero in enumerate(lista_procesos, 1):
+        log.separador()
+        try:
+            worker_task(numero, None, results, actes, errors, lock)
+            log.exito(f"Proceso {i} completado")
+        except Exception as e:
+            log.error(f"Error en proceso {i}: {e}")
+        time.sleep(1)
+
+    log.titulo("RESULTADOS")
+    log.resultado(f"Procesos:     {len(lista_procesos)}")
+    log.resultado(f"Actuaciones:  {len(actes)}")
+    log.resultado(f"Errores:      {len(errors)}")
+
+
+# ─── Trigger de ejecución manual ─────────────────────────────────────
+TRIGGER_FILE = "/app/data/.run_now"
+
+
+def chequear_trigger_manual() -> tuple[bool, str]:
+    """Si existe el archivo trigger, lo borra y devuelve (True, usuario)."""
+    if not os.path.exists(TRIGGER_FILE):
+        return False, ""
+    try:
+        with open(TRIGGER_FILE, "r") as f:
+            usuario = f.read().strip() or "manual"
+    except Exception:
+        usuario = "manual"
+    try:
+        os.remove(TRIGGER_FILE)
+    except Exception:
+        pass
+    return True, usuario
+
+
+# ─── Main loop ────────────────────────────────────────────────────────
 def main():
     log.titulo("SCRAPER RAMA JUDICIAL")
     log.resultado(f"🌍 Entorno: {ENV}")
@@ -200,31 +272,55 @@ def main():
             "11001310300120080020700",
             "11001310300120080023700",
             "11001310300120130071600",
-            "11001310300120150030300"
+            "11001310300120150030300",
         ])
-    else:
-        bogota_tz = ZoneInfo("America/Bogota")
-        hh, mm    = map(int, SCHEDULE_TIME.split(":"))
-        log.progreso(f"Scheduler iniciado. Próxima ejecución: {SCHEDULE_TIME}")
+        return
 
-        while True:
-            now    = datetime.now(bogota_tz)
-            target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-            if now >= target:
-                target += timedelta(days=1)
+    bogota_tz = ZoneInfo("America/Bogota")
+    cfg = get_runtime_config()
+    schedule_time = cfg["schedule_time"]
+    log.progreso(f"Scheduler iniciado. Próxima ejecución: {schedule_time}")
+    log.progreso(f"Estado scraper: {'ACTIVO' if cfg['activo'] else 'PAUSADO'}")
 
-            remaining = (target - now).total_seconds()
-            while remaining > 0:
-                if remaining > 3600:
-                    log.progreso(f"Próxima ejecución en {int(remaining//3600)} hora(s)")
-                    time.sleep(3600)
-                    remaining -= 3600
+    while True:
+        # Releer config en cada vuelta para ver cambios
+        cfg = get_runtime_config()
+        schedule_time = cfg["schedule_time"]
+        hh, mm = map(int, schedule_time.split(":"))
+
+        now    = datetime.now(bogota_tz)
+        target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+
+        remaining = (target - now).total_seconds()
+        log.progreso(f"Próximo ciclo programado: {schedule_time} (en {int(remaining//3600)}h {int((remaining%3600)//60)}m)")
+
+        # Esperar hasta el target, pero chequeando trigger manual cada 10s
+        while remaining > 0:
+            tick = min(10, remaining)
+            time.sleep(tick)
+            remaining -= tick
+
+            # ¿Ejecución manual solicitada?
+            triggered, usuario = chequear_trigger_manual()
+            if triggered:
+                log.progreso(f"⚡ Ejecución manual solicitada por {usuario}")
+                cfg = get_runtime_config()
+                if cfg["activo"]:
+                    ejecutar_ciclo(tipo="manual", iniciado_por=usuario)
                 else:
-                    log.progreso(f"Próxima ejecución en {int(remaining//60)}m {int(remaining%60)}s")
-                    time.sleep(remaining)
-                    remaining = 0
+                    log.advertencia("Scraper pausado, ignorando trigger manual")
+                # Romper el wait y recalcular el siguiente target
+                break
 
-            ejecutar_ciclo()
+        else:
+            # Llegamos al horario programado sin interrupciones
+            cfg = get_runtime_config()
+            if cfg["activo"]:
+                ejecutar_ciclo(tipo="automatica", iniciado_por="scheduler")
+            else:
+                log.advertencia("Scraper pausado, saltando ciclo programado")
 
 
 if __name__ == "__main__":

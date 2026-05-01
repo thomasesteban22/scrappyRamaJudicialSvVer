@@ -39,7 +39,8 @@ def send_report_email():
         msg.attach(part)
 
     # Enviar por SMTP SSL
-    smtp = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+    smtp = smtplib.SMTP("smtp.gmail.com", 587)
+    smtp.starttls()
     smtp.login(EMAIL_USER, EMAIL_PASS)
     smtp.sendmail(EMAIL_USER, [EMAIL_USER], msg.as_string())
     smtp.quit()
