@@ -25,7 +25,7 @@ _runner_state = {
 
 
 # ─── Auth helper ───────────────────────────────────────────────────────
-def check_token(token: str | None):
+def check_token(token):
     if not API_TOKEN:
         return  # sin token configurado = libre (solo para debug)
     if token != API_TOKEN:
@@ -87,7 +87,7 @@ def health():
 
 
 @app.get("/api/status")
-def get_status(x_api_token: str | None = Header(default=None)):
+def get_status(x_api_token=Header(default=None)):
     check_token(x_api_token)
 
     # Verificar estado del contenedor
@@ -107,7 +107,7 @@ def get_status(x_api_token: str | None = Header(default=None)):
 
 
 @app.get("/api/config")
-def get_config(x_api_token: str | None = Header(default=None)):
+def get_config(x_api_token=Header(default=None)):
     check_token(x_api_token)
     try:
         return magna.get_config()
@@ -116,7 +116,7 @@ def get_config(x_api_token: str | None = Header(default=None)):
 
 
 @app.get("/api/procesos")
-def get_procesos(x_api_token: str | None = Header(default=None)):
+def get_procesos(x_api_token=Header(default=None)):
     check_token(x_api_token)
     try:
         procesos = magna.get_procesos()
@@ -126,17 +126,17 @@ def get_procesos(x_api_token: str | None = Header(default=None)):
 
 
 @app.post("/api/run")
-async def run_manual(req: RunRequest, x_api_token: str | None = Header(default=None)):
+async def run_manual(req: RunRequest, x_api_token=Header(default=None)):
     check_token(x_api_token)
 
     if _runner_state["running"]:
-        raise HTTPException(status_code=409, detail="Ya hay una ejecución en curso")
+        raise HTTPException(status_code=409, detail="Ya hay una ejecucion en curso")
 
-    # Crear ejecución en MySQL via Magna
+    # Crear ejecucion en MySQL via Magna
     try:
         ejec_id = magna.crear_ejecucion(tipo="manual", iniciado_por=req.started_by)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"No se pudo registrar ejecución: {e}")
+        raise HTTPException(status_code=500, detail=f"No se pudo registrar ejecucion: {e}")
 
     _runner_state.update({
         "running": True,
@@ -145,33 +145,37 @@ async def run_manual(req: RunRequest, x_api_token: str | None = Header(default=N
         "started_by": req.started_by,
     })
 
-    await broker.publish(f"[api] Ejecución manual #{ejec_id} iniciada por {req.started_by}")
+    await broker.publish(f"[api] Ejecucion manual #{ejec_id} iniciada por {req.started_by}")
 
-    # Disparar el scraper en un proceso separado (lo conectamos en el Paso 4)
+    # Disparar el scraper escribiendo el trigger file con el ejec_id
     asyncio.create_task(_run_scraper_once(ejec_id, req.started_by))
 
     return {"execution_id": ejec_id, "status": "started"}
 
 
-async def _run_scraper_once(ejec_id: int, started_by: str):
-    """Dispara una ejecución manual escribiendo el trigger file en el volumen del scraper."""
+async def _run_scraper_once(ejec_id, started_by):
+    """Dispara una ejecucion manual escribiendo el trigger file en el volumen del scraper.
+    
+    Formato del trigger: "usuario|ejec_id" para que el scraper use la ejecucion
+    ya creada por la API, en lugar de crear una duplicada.
+    """
     try:
         # El scraper monta /app2/data como /app/data
         trigger_path = "/host_data/.run_now"
         try:
             with open(trigger_path, "w") as f:
-                f.write(started_by)
-            await broker.publish(f"[runner] Trigger manual creado para ejecución #{ejec_id} por {started_by}")
-            await broker.publish(f"[runner] El scraper detectará el trigger en los próximos 10 segundos")
+                f.write(f"{started_by}|{ejec_id}")
+            await broker.publish(f"[runner] Trigger manual creado para ejecucion #{ejec_id} por {started_by}")
+            await broker.publish(f"[runner] El scraper detectara el trigger en los proximos 10 segundos")
         except Exception as e:
             await broker.publish(f"[runner] ERROR creando trigger: {e}")
             magna.actualizar_ejecucion(ejec_id, estado="fallida")
             return
 
-        # NOTA: El scraper actualiza la ejecución cuando termina su ciclo.
-        # No hacemos polling aquí; confiamos en el reporte del scraper.
+        # NOTA: El scraper actualiza la ejecucion cuando termina su ciclo.
+        # No hacemos polling aqui; confiamos en el reporte del scraper.
     finally:
-        # Liberamos el lock pronto: la ejecución es asíncrona desde el lado del scraper
+        # Liberamos el lock pronto: la ejecucion es asincrona desde el lado del scraper
         await asyncio.sleep(15)  # margen para que el scraper detecte y arranque
         _runner_state.update({
             "running": False,

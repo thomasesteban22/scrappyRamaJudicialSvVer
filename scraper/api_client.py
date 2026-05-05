@@ -7,7 +7,15 @@ MAGNA_URL   = os.getenv('MAGNA_URL', 'https://magnaabogados.com/api/scraper/actu
 MAGNA_TOKEN = os.getenv('MAGNA_TOKEN', 'token-scraper-magna-2026')
 
 
-def enviar_actuaciones(actes: list) -> dict:
+def enviar_actuaciones(actes: list, execution_id: int = None) -> dict:
+    """
+    Envia un lote de actuaciones a Magna.
+
+    Args:
+        actes: lista de tuplas (numProceso, fechaActuacion, actuacion, anotacion, url, fechaInicial)
+        execution_id: ID de la ejecucion actual (opcional). Si se pasa, Magna guarda
+                      el detalle de cada actuacion procesada en scraper_ejecucion_detalles.
+    """
     if not actes:
         log.debug("Sin actuaciones para enviar")
         return {"insertadas": 0, "duplicadas": 0, "errores": 0}
@@ -16,8 +24,8 @@ def enviar_actuaciones(actes: list) -> dict:
         "actuaciones": [
             {
                 "numProceso":     numero,
-                "fechaActuacion": fecha_actuacion,  # fecha REAL de la actuacion (Rama Judicial)
-                "fechaEstado":    fecha_inicial,    # "Fecha Inicia Termino" (puede ser vacio)
+                "fechaActuacion": fecha_actuacion,
+                "fechaEstado":    fecha_inicial,
                 "actuacion":      nombre[:100],
                 "observacion":    anotacion,
                 "etapa":          ""
@@ -25,6 +33,9 @@ def enviar_actuaciones(actes: list) -> dict:
             for numero, fecha_actuacion, nombre, anotacion, _url, fecha_inicial in actes
         ]
     }
+
+    if execution_id is not None:
+        payload["execution_id"] = execution_id
 
     try:
         r = requests.post(
@@ -34,7 +45,7 @@ def enviar_actuaciones(actes: list) -> dict:
                 "x-scraper-token": MAGNA_TOKEN,
                 "Content-Type":    "application/json"
             },
-            timeout=30
+            timeout=60
         )
         r.raise_for_status()
         resultado = r.json()

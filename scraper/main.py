@@ -29,7 +29,7 @@ from . import magna_client
 
 
 # ─── Config helpers ────────────────────────────────────────────────────
-def get_runtime_config() -> dict:
+def get_runtime_config():
     """Lee la config actual desde Magna; cae a valores del .env si falla."""
     cfg = magna_client.get_config()
     return {
@@ -78,7 +78,7 @@ def send_report_email():
         msg["From"]    = EMAIL_USER
         msg["To"]      = EMAIL_USER
         msg.attach(MIMEText(
-            f"Adjunto encontrarás el reporte de actuaciones generado el {fecha_str}.",
+            f"Adjunto encontraras el reporte de actuaciones generado el {fecha_str}.",
             "plain"
         ))
         if os.path.exists(PDF_PATH):
@@ -94,21 +94,35 @@ def send_report_email():
         log.error(f"Error enviando correo: {e}")
 
 
-# ─── Ejecución del ciclo ──────────────────────────────────────────────
-def ejecutar_ciclo(tipo: str = "automatica", iniciado_por: str = "scheduler"):
+# ─── Ejecucion del ciclo ──────────────────────────────────────────────
+def ejecutar_ciclo(tipo="automatica", iniciado_por="scheduler", ejec_id_externo=None):
+    """
+    Ejecuta un ciclo de scraping.
+
+    Args:
+        tipo: 'automatica' o 'manual'
+        iniciado_por: nombre del usuario o 'scheduler'
+        ejec_id_externo: si se pasa, se usa esa ejecucion (ya creada por la API).
+                         Si es None, se crea una nueva. Esto evita duplicar
+                         ejecuciones cuando el trigger viene del panel web.
+    """
     cfg = get_runtime_config()
     dias_busqueda = cfg["dias_busqueda"]
     num_threads   = cfg["num_threads"]
 
-    # Crear ejecución en Magna
-    ejec_id = magna_client.crear_ejecucion(tipo=tipo, iniciado_por=iniciado_por)
-    if ejec_id:
-        log.progreso(f"Ejecución #{ejec_id} registrada en Magna ({tipo}, por {iniciado_por})")
+    # Usar ejecucion existente o crear una nueva
+    if ejec_id_externo:
+        ejec_id = ejec_id_externo
+        log.progreso(f"Ejecucion #{ejec_id} (creada por API, {tipo}, por {iniciado_por})")
+    else:
+        ejec_id = magna_client.crear_ejecucion(tipo=tipo, iniciado_por=iniciado_por)
+        if ejec_id:
+            log.progreso(f"Ejecucion #{ejec_id} registrada en Magna ({tipo}, por {iniciado_por})")
 
     log.titulo("INICIANDO CICLO DE SCRAPING")
-    log.resultado(f"📅 Fecha:   {datetime.now().strftime('%d/%m/%Y')}")
-    log.resultado(f"🎯 Período: últimos {dias_busqueda} días")
-    log.resultado(f"🔄 Hilos:   {num_threads}")
+    log.resultado(f"Fecha:   {datetime.now().strftime('%d/%m/%Y')}")
+    log.resultado(f"Periodo: ultimos {dias_busqueda} dias")
+    log.resultado(f"Hilos:   {num_threads}")
     log.separador()
 
     start_ts = time.time()
@@ -135,9 +149,9 @@ def ejecutar_ciclo(tipo: str = "automatica", iniciado_por: str = "scheduler"):
         )
         return
 
-    log.progreso("Obteniendo sesión...")
+    log.progreso("Obteniendo sesion...")
     get_session()
-    log.exito("Sesión lista — iniciando threads")
+    log.exito("Sesion lista, iniciando threads")
 
     q = Queue()
     for num in procesos:
@@ -159,7 +173,7 @@ def ejecutar_ciclo(tipo: str = "automatica", iniciado_por: str = "scheduler"):
                     worker_task(numero, None, results, actes, errors, lock)
                     break
                 except Exception as exc:
-                    log.advertencia(f"{numero}: intento {intento+1}/10 — {exc}")
+                    log.advertencia(f"{numero}: intento {intento+1}/10 - {exc}")
                     if intento == 9:
                         with lock:
                             errors.append((numero, str(exc)[:200]))
@@ -176,8 +190,8 @@ def ejecutar_ciclo(tipo: str = "automatica", iniciado_por: str = "scheduler"):
 
     generar_pdf(TOTAL, actes, errors, start_ts, time.time())
 
-    # Enviar a Magna y capturar resultado
-    resultado_envio = enviar_actuaciones(actes) or {}
+    # Enviar a Magna y capturar resultado (con execution_id para guardar detalles)
+    resultado_envio = enviar_actuaciones(actes, execution_id=ejec_id) or {}
     insertadas = resultado_envio.get("insertadas", 0)
     duplicadas = resultado_envio.get("duplicadas", 0)
 
@@ -190,14 +204,14 @@ def ejecutar_ciclo(tipo: str = "automatica", iniciado_por: str = "scheduler"):
             log.error(f"Error enviando correo: {e}")
 
     log.titulo("RESUMEN DEL CICLO")
-    log.resultado(f"✅ Escaneados:  {TOTAL - len(errors)}")
-    log.resultado(f"❌ Errores:     {len(errors)}")
-    log.resultado(f"📋 Actuaciones: {len(actes)}")
-    log.resultado(f"💾 Insertadas:  {insertadas}")
-    log.resultado(f"♻️  Duplicadas:  {duplicadas}")
+    log.resultado(f"Escaneados:  {TOTAL - len(errors)}")
+    log.resultado(f"Errores:     {len(errors)}")
+    log.resultado(f"Actuaciones: {len(actes)}")
+    log.resultado(f"Insertadas:  {insertadas}")
+    log.resultado(f"Duplicadas:  {duplicadas}")
     log.separador()
 
-    # Cerrar ejecución en Magna
+    # Cerrar ejecucion en Magna
     magna_client.actualizar_ejecucion(
         ejec_id,
         estado="completada",
@@ -211,13 +225,13 @@ def ejecutar_ciclo(tipo: str = "automatica", iniciado_por: str = "scheduler"):
 
 
 def probar_procesos(lista_procesos):
-    log.titulo(f"MODO PRUEBA — {len(lista_procesos)} PROCESOS")
+    log.titulo(f"MODO PRUEBA - {len(lista_procesos)} PROCESOS")
     results, actes, errors = [], [], []
     lock = threading.Lock()
     worker.process_counter = itertools.count(1)
     worker.TOTAL_PROCESSES = len(lista_procesos)
 
-    log.progreso("Obteniendo sesión...")
+    log.progreso("Obteniendo sesion...")
     get_session()
 
     for i, numero in enumerate(lista_procesos, 1):
@@ -235,32 +249,58 @@ def probar_procesos(lista_procesos):
     log.resultado(f"Errores:      {len(errors)}")
 
 
-# ─── Trigger de ejecución manual ─────────────────────────────────────
+# ─── Trigger de ejecucion manual ─────────────────────────────────────
 TRIGGER_FILE = "/app/data/.run_now"
 
 
-def chequear_trigger_manual() -> tuple[bool, str]:
-    """Si existe el archivo trigger, lo borra y devuelve (True, usuario)."""
+def chequear_trigger_manual():
+    """
+    Si existe el archivo trigger, lo borra y devuelve (True, usuario, ejec_id).
+
+    Formato del trigger file:
+      - "usuario|ejec_id"  -> cuando viene del FastAPI (ejecucion ya creada)
+      - "usuario"          -> formato viejo, sin ejec_id (compat)
+      - vacio              -> usa "manual" sin ejec_id
+    """
     if not os.path.exists(TRIGGER_FILE):
-        return False, ""
+        return False, "", None
+
+    usuario = "manual"
+    ejec_id = None
+
     try:
         with open(TRIGGER_FILE, "r") as f:
-            usuario = f.read().strip() or "manual"
+            contenido = f.read().strip()
+
+        if contenido:
+            if "|" in contenido:
+                # Formato nuevo: "usuario|ejec_id"
+                partes = contenido.split("|", 1)
+                usuario = partes[0] or "manual"
+                try:
+                    ejec_id = int(partes[1])
+                except (ValueError, IndexError):
+                    ejec_id = None
+            else:
+                # Formato viejo: solo el usuario
+                usuario = contenido
     except Exception:
         usuario = "manual"
+
     try:
         os.remove(TRIGGER_FILE)
     except Exception:
         pass
-    return True, usuario
+
+    return True, usuario, ejec_id
 
 
 # ─── Main loop ────────────────────────────────────────────────────────
 def main():
     log.titulo("SCRAPER RAMA JUDICIAL")
-    log.resultado(f"🌍 Entorno: {ENV}")
-    log.resultado(f"🔧 Debug:   {'ACTIVADO' if DEBUG_SCRAPER else 'DESACTIVADO'}")
-    log.resultado(f"📅 Fecha:   {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    log.resultado(f"Entorno: {ENV}")
+    log.resultado(f"Debug:   {'ACTIVADO' if DEBUG_SCRAPER else 'DESACTIVADO'}")
+    log.resultado(f"Fecha:   {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     log.separador()
 
     setup_environment()
@@ -279,7 +319,7 @@ def main():
     bogota_tz = ZoneInfo("America/Bogota")
     cfg = get_runtime_config()
     schedule_time = cfg["schedule_time"]
-    log.progreso(f"Scheduler iniciado. Próxima ejecución: {schedule_time}")
+    log.progreso(f"Scheduler iniciado. Proxima ejecucion: {schedule_time}")
     log.progreso(f"Estado scraper: {'ACTIVO' if cfg['activo'] else 'PAUSADO'}")
 
     while True:
@@ -294,7 +334,7 @@ def main():
             target += timedelta(days=1)
 
         remaining = (target - now).total_seconds()
-        log.progreso(f"Próximo ciclo programado: {schedule_time} (en {int(remaining//3600)}h {int((remaining%3600)//60)}m)")
+        log.progreso(f"Proximo ciclo programado: {schedule_time} (en {int(remaining//3600)}h {int((remaining%3600)//60)}m)")
 
         # Esperar hasta el target, pero chequeando trigger manual cada 10s
         while remaining > 0:
@@ -302,13 +342,19 @@ def main():
             time.sleep(tick)
             remaining -= tick
 
-            # ¿Ejecución manual solicitada?
-            triggered, usuario = chequear_trigger_manual()
+            # Ejecucion manual solicitada?
+            triggered, usuario, ejec_id_existente = chequear_trigger_manual()
             if triggered:
-                log.progreso(f"⚡ Ejecución manual solicitada por {usuario}")
+                log.progreso(f"Ejecucion manual solicitada por {usuario}")
+                if ejec_id_existente:
+                    log.progreso(f"   Usando ejecucion existente #{ejec_id_existente} (creada por API)")
                 cfg = get_runtime_config()
                 if cfg["activo"]:
-                    ejecutar_ciclo(tipo="manual", iniciado_por=usuario)
+                    ejecutar_ciclo(
+                        tipo="manual",
+                        iniciado_por=usuario,
+                        ejec_id_externo=ejec_id_existente
+                    )
                 else:
                     log.advertencia("Scraper pausado, ignorando trigger manual")
                 # Romper el wait y recalcular el siguiente target
